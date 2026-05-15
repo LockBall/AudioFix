@@ -12,7 +12,9 @@ from tkinter import ttk
 
 from audiofix import __version__
 from audiofix.core.config import (
+    APP_ROW_GAP_PX,
     CONTROL_TITLE_GAP_PX,
+    COMPACT_SECTION_ROW_GAP_PX,
     DB_DISPLAY_DECIMALS,
     DEFAULT_DB_INTERVAL,
     DEFAULT_ENCODER_MODE,
@@ -20,12 +22,12 @@ from audiofix.core.config import (
     DEFAULT_MAX_DB,
     DEFAULT_MIN_DB,
     DEFAULT_PEAK_HEADROOM_DB,
-    DEFAULT_PEAK_REFINEMENT_SCALE,
     DEFAULT_VORBIS_QUALITY,
     DEFAULT_WINDOW_HEIGHT,
     DEFAULT_WINDOW_WIDTH,
     ENCODER_MODE_BITRATE,
     ENCODER_MODE_QUALITY,
+    RELATED_CONTROL_GAP_PX,
     VORBIS_QUALITY_BITRATES,
     get_runtime_paths,
 )
@@ -38,7 +40,6 @@ from audiofix.core.ffmpeg import (
     gain_to_peak_headroom_db,
     measure_max_volume_db,
     probe_audio_info,
-    scale_gain_db,
 )
 from audiofix.core.planning import (
     build_output_plan,
@@ -122,7 +123,6 @@ def main() -> None:
     initial_gain_db_var = tk.StringVar(value=DEFAULT_INITIAL_GAIN_DB_TEXT)
     db_interval_var = tk.StringVar(value="")
     peak_headroom_db_var = tk.StringVar(value="")
-    peak_refinement_scale_var = tk.StringVar(value="")
     step_count_var = tk.StringVar(value="")
     output_folder_var = tk.StringVar(value="")
     audio_info_var = tk.StringVar(value="Audio info: select an input file.")
@@ -137,7 +137,6 @@ def main() -> None:
     peak_analysis_results_var = tk.StringVar(value="1 --")
     last_audio_info: list[AudioInfo | None] = [None]
     last_output_folder: list[Path | None] = [None]
-    last_refined_gain_db: list[float | None] = [None]
 
     def format_db(value: float, signed: bool = False) -> str:
         sign = "+" if signed else ""
@@ -147,7 +146,6 @@ def main() -> None:
     min_db_var.set(format_db(DEFAULT_MIN_DB))
     db_interval_var.set(format_db(DEFAULT_DB_INTERVAL))
     peak_headroom_db_var.set(format_db(DEFAULT_PEAK_HEADROOM_DB))
-    peak_refinement_scale_var.set(format_db(DEFAULT_PEAK_REFINEMENT_SCALE))
 
     def refresh_tool_status() -> None:
         tool_status = check_ffmpeg_tools()
@@ -277,7 +275,6 @@ def main() -> None:
             return
 
     def reset_peak_analysis_results(message: str) -> None:
-        last_refined_gain_db[0] = None
         peak_analysis_results_var.set("1 --")
         status_var.set(message)
 
@@ -286,23 +283,6 @@ def main() -> None:
             peak_headroom_db_var.set(format_db(DEFAULT_PEAK_HEADROOM_DB))
         format_decimal_var(peak_headroom_db_var)
         reset_peak_analysis_results("Headroom changed. Click Analyze peak to recalculate Initial dB.")
-
-    def apply_refined_gain_scale() -> None:
-        if last_refined_gain_db[0] is None:
-            return
-        try:
-            scale = float(peak_refinement_scale_var.get())
-        except ValueError:
-            status_var.set("Enter a valid peak scale value.")
-            return
-        initial_gain_db_var.set(format_db(scale_gain_db(last_refined_gain_db[0], scale)))
-        update_command_preview()
-
-    def on_peak_scale_focus_out() -> None:
-        if not peak_refinement_scale_var.get().strip():
-            peak_refinement_scale_var.set(format_db(1.0))
-        format_decimal_var(peak_refinement_scale_var)
-        apply_refined_gain_scale()
 
     def browse_file() -> None:
         path = filedialog.askopenfilename(
@@ -318,12 +298,10 @@ def main() -> None:
             file_path_var.set(str(input_path))
             output_folder_var.set(str(input_path.with_name(f"{input_path.stem}_out")))
             last_audio_info[0] = None
-            last_refined_gain_db[0] = None
             peak_analysis_results_var.set("1 --")
             last_output_folder[0] = None
             open_output_button.state(["disabled"])
-            get_audio_info(input_path)
-            update_command_preview()
+            analyze_peak()
 
     def browse_output_folder() -> None:
         path = filedialog.askdirectory(
@@ -359,7 +337,7 @@ def main() -> None:
             status_var.set("Cannot read input audio settings before peak analysis.")
             return
         if ENCODER_MODE_LABELS[encoder_mode_choice_var.get()] == ENCODER_MODE_BITRATE and audio_info.bit_rate is None:
-            status_var.set("Input audio bitrate is unknown; cannot refine peak analysis.")
+            status_var.set("Input audio bitrate is unknown; cannot analyze peak with match-bitrate mode.")
             return
 
         status_var.set("Analyzing peak...")
@@ -377,19 +355,12 @@ def main() -> None:
         initial_gain_db = gain_to_peak_headroom_db(max_volume_db, headroom_db)
         peak_analysis_results_var.set(f"1)    {format_db(initial_gain_db, signed=True)}")
         peak_target_db = -abs(headroom_db)
-        last_refined_gain_db[0] = initial_gain_db
-        try:
-            peak_scale = float(peak_refinement_scale_var.get())
-        except ValueError:
-            status_var.set("Enter a valid peak scale value.")
-            return
-        scaled_gain_db = scale_gain_db(initial_gain_db, peak_scale)
-        initial_gain_db_var.set(format_db(scaled_gain_db))
+        initial_gain_db_var.set(format_db(initial_gain_db))
         status_var.set(
             f"Peak analysis: source max {format_db(max_volume_db)} dB, "
             f"target {format_db(peak_target_db)} dB, "
             f"headroom {format_db(abs(headroom_db))} dB, "
-            f"scaled initial {format_db(scaled_gain_db)} dB."
+            f"initial {format_db(initial_gain_db)} dB."
         )
         update_command_preview()
 
@@ -509,7 +480,7 @@ def main() -> None:
         column=0,
         columnspan=2,
         sticky="ew",
-        pady=(0, 4),
+        pady=(0, CONTROL_TITLE_GAP_PX * 2),
     )
     ttk.Label(tools_frame, textvariable=ffmpeg_status_var, style="Status.TLabel").grid(
         row=1,
@@ -524,7 +495,7 @@ def main() -> None:
     )
 
     input_frame = ttk.Frame(frame)
-    input_frame.grid(row=1, column=0, sticky="ew", pady=(16, 0))
+    input_frame.grid(row=1, column=0, sticky="ew", pady=(APP_ROW_GAP_PX, 0))
     input_frame.columnconfigure(1, weight=1)
 
     ttk.Label(input_frame, text="Input file").grid(row=0, column=0, sticky="w")
@@ -541,26 +512,24 @@ def main() -> None:
         column=1,
         columnspan=2,
         sticky="w",
-        pady=(6, 0),
+        pady=(COMPACT_SECTION_ROW_GAP_PX, 0),
     )
 
     settings_frame = ttk.Frame(frame)
-    settings_frame.grid(row=2, column=0, sticky="new", pady=(20, 0))
+    settings_frame.grid(row=2, column=0, sticky="new", pady=(APP_ROW_GAP_PX, 0))
     for column in range(4):
         settings_frame.columnconfigure(column, weight=1, uniform="settings")
 
-    min_db_frame = ttk.Frame(settings_frame)
-    min_db_frame.grid(row=0, column=0, sticky="w", padx=(0, 12))
-    ttk.Label(min_db_frame, text="Maximum dB").grid(row=0, column=0, sticky="w")
-    ttk.Label(min_db_frame, textvariable=max_db_var, width=12, anchor="e").grid(
+    ttk.Label(settings_frame, text="Maximum dB").grid(row=0, column=0, sticky="w")
+    ttk.Label(settings_frame, textvariable=max_db_var, width=12, anchor="e").grid(
         row=1,
         column=0,
-        sticky="ew",
-        pady=(CONTROL_TITLE_GAP_PX, 8),
+        sticky="w",
+        pady=(CONTROL_TITLE_GAP_PX, RELATED_CONTROL_GAP_PX),
     )
-    ttk.Label(min_db_frame, text="Minimum dB").grid(row=2, column=0, sticky="w")
+    ttk.Label(settings_frame, text="Minimum dB").grid(row=2, column=0, sticky="w")
     min_db_entry = ttk.Entry(
-        min_db_frame,
+        settings_frame,
         textvariable=min_db_var,
         width=12,
         justify="right",
@@ -573,76 +542,59 @@ def main() -> None:
     )
     min_db_entry.bind("<FocusOut>", lambda _event: format_decimal_var(min_db_var))
 
-    db_interval_frame = ttk.Frame(settings_frame)
-    db_interval_frame.grid(row=0, column=1, sticky="w", padx=(0, 12))
-    ttk.Label(db_interval_frame, text="dB interval").grid(row=0, column=0, sticky="w")
+    ttk.Label(settings_frame, text="dB interval").grid(row=0, column=1, sticky="w")
     db_interval_entry = ttk.Entry(
-        db_interval_frame,
+        settings_frame,
         textvariable=db_interval_var,
         width=12,
         justify="right",
     )
-    db_interval_entry.grid(row=1, column=0, sticky="w", pady=(CONTROL_TITLE_GAP_PX, 8))
+    db_interval_entry.grid(row=1, column=1, sticky="w", pady=(CONTROL_TITLE_GAP_PX, RELATED_CONTROL_GAP_PX))
     db_interval_entry.bind("<FocusOut>", lambda _event: format_decimal_var(db_interval_var))
-    ttk.Label(db_interval_frame, text="Number of files").grid(row=2, column=0, sticky="w")
-    ttk.Label(db_interval_frame, textvariable=step_count_var, width=12, anchor="e").grid(
+    ttk.Label(settings_frame, text="Number of files").grid(row=2, column=1, sticky="w")
+    ttk.Label(settings_frame, textvariable=step_count_var, width=12, anchor="e").grid(
         row=3,
-        column=0,
-        sticky="ew",
-        pady=(8, 0),
+        column=1,
+        sticky="w",
+        pady=(RELATED_CONTROL_GAP_PX, 0),
     )
 
-    initial_gain_db_frame = ttk.Frame(settings_frame)
-    initial_gain_db_frame.grid(row=0, column=2, sticky="w", padx=(0, 12))
-    initial_gain_db_frame.columnconfigure(1, weight=1)
-    ttk.Label(initial_gain_db_frame, text="Initial dB").grid(row=0, column=0, sticky="w")
+    ttk.Label(settings_frame, text="Initial dB").grid(row=0, column=2, sticky="w")
     initial_gain_db_entry = ttk.Entry(
-        initial_gain_db_frame,
+        settings_frame,
         textvariable=initial_gain_db_var,
         width=12,
         justify="right",
     )
-    initial_gain_db_entry.grid(row=1, column=0, sticky="w", pady=(CONTROL_TITLE_GAP_PX, 0))
+    initial_gain_db_entry.grid(row=1, column=2, sticky="w", pady=(CONTROL_TITLE_GAP_PX, 0))
     initial_gain_db_entry.bind("<FocusOut>", lambda _event: format_decimal_var(initial_gain_db_var))
     ttk.Button(
-        initial_gain_db_frame,
+        settings_frame,
         text="Analyze peak",
         command=analyze_peak,
-    ).grid(row=2, column=0, sticky="w", pady=(6, 0))
-    ttk.Label(initial_gain_db_frame, text="Peak gain").grid(
+    ).grid(row=3, column=2, sticky="w", pady=(CONTROL_TITLE_GAP_PX, 0))
+    ttk.Label(settings_frame, text="Peak gain").grid(
         row=2,
-        column=1,
+        column=3,
         sticky="w",
-        padx=(12, 0),
-        pady=(6, 0),
+        pady=(COMPACT_SECTION_ROW_GAP_PX, 0),
     )
     ttk.Label(
-        initial_gain_db_frame,
+        settings_frame,
         textvariable=peak_analysis_results_var,
         style="Muted.TLabel",
         width=12,
         justify="left",
-    ).grid(row=3, column=1, rowspan=5, sticky="nw", padx=(12, 0), pady=(CONTROL_TITLE_GAP_PX, 0))
-    ttk.Label(initial_gain_db_frame, text="Peak scale").grid(row=3, column=0, sticky="w", pady=(8, 0))
-    peak_refinement_scale_entry = ttk.Entry(
-        initial_gain_db_frame,
-        textvariable=peak_refinement_scale_var,
-        width=12,
-        justify="right",
-    )
-    peak_refinement_scale_entry.grid(row=4, column=0, sticky="w", pady=(CONTROL_TITLE_GAP_PX, 0))
-    peak_refinement_scale_entry.bind("<FocusOut>", lambda _event: on_peak_scale_focus_out())
+    ).grid(row=3, column=3, rowspan=5, sticky="nw", pady=(CONTROL_TITLE_GAP_PX, 0))
 
-    peak_search_frame = ttk.Frame(settings_frame)
-    peak_search_frame.grid(row=0, column=3, sticky="w")
-    ttk.Label(peak_search_frame, text="Headroom dB").grid(row=0, column=0, sticky="w")
+    ttk.Label(settings_frame, text="Headroom dB").grid(row=0, column=3, sticky="w")
     peak_headroom_db_entry = ttk.Entry(
-        peak_search_frame,
+        settings_frame,
         textvariable=peak_headroom_db_var,
         width=12,
         justify="right",
     )
-    peak_headroom_db_entry.grid(row=1, column=0, sticky="w", pady=(CONTROL_TITLE_GAP_PX, 8))
+    peak_headroom_db_entry.grid(row=1, column=3, sticky="w", pady=(CONTROL_TITLE_GAP_PX, RELATED_CONTROL_GAP_PX))
     peak_headroom_db_entry.bind("<FocusOut>", lambda _event: on_peak_headroom_focus_out())
 
     min_db_var.trace_add("write", update_step_count)
@@ -656,12 +608,8 @@ def main() -> None:
     update_step_count()
     update_command_preview()
 
-    audio_frame = ttk.Frame(frame)
-    audio_frame.grid(row=3, column=0, sticky="ew", pady=(10, 0))
-    audio_frame.columnconfigure(0, weight=1)
-
-    encoder_frame = ttk.Frame(audio_frame)
-    encoder_frame.grid(row=0, column=0, sticky="ew")
+    encoder_frame = ttk.Frame(frame)
+    encoder_frame.grid(row=4, column=0, sticky="ew", pady=(APP_ROW_GAP_PX, 0))
     encoder_frame.columnconfigure(1, weight=1)
     ttk.Label(encoder_frame, text="Encoder mode").grid(row=0, column=0, sticky="w")
     ttk.Combobox(
@@ -670,9 +618,9 @@ def main() -> None:
         values=tuple(ENCODER_MODE_LABELS),
         state="readonly",
         width=22,
-    ).grid(row=1, column=0, sticky="w", pady=(CONTROL_TITLE_GAP_PX, 0))
+    ).grid(row=1, column=0, sticky="nw", pady=(CONTROL_TITLE_GAP_PX, 0))
     quality_scale_frame = ttk.Frame(encoder_frame)
-    quality_scale_frame.grid(row=1, column=1, sticky="ew", padx=(32, 0), pady=(4, 0))
+    quality_scale_frame.grid(row=0, column=1, rowspan=2, sticky="ew", padx=(32, 0))
     ttk.Label(
         quality_scale_frame,
         text="q\nkbps",
@@ -705,7 +653,7 @@ def main() -> None:
     update_vorbis_quality_markers()
 
     command_frame = ttk.Frame(frame)
-    command_frame.grid(row=4, column=0, sticky="ew", pady=(16, 0))
+    command_frame.grid(row=5, column=0, sticky="ew", pady=(APP_ROW_GAP_PX, 0))
     command_frame.columnconfigure(0, weight=1)
 
     ttk.Label(command_frame, text="FFmpeg command").grid(row=0, column=0, sticky="w")
@@ -722,7 +670,7 @@ def main() -> None:
     ).grid(row=1, column=0, columnspan=2, sticky="ew", pady=(CONTROL_TITLE_GAP_PX, 0))
 
     output_frame = ttk.Frame(frame)
-    output_frame.grid(row=5, column=0, sticky="ew", pady=(20, 0))
+    output_frame.grid(row=6, column=0, sticky="ew", pady=(APP_ROW_GAP_PX, 0))
     output_frame.columnconfigure(1, weight=1)
 
     ttk.Label(output_frame, text="Output folder").grid(row=0, column=0, sticky="w")
@@ -738,7 +686,7 @@ def main() -> None:
     ).grid(row=0, column=2, sticky="e")
 
     action_frame = ttk.Frame(frame)
-    action_frame.grid(row=6, column=0, sticky="ew", pady=(16, 0))
+    action_frame.grid(row=7, column=0, sticky="ew", pady=(APP_ROW_GAP_PX, 0))
     action_frame.columnconfigure(0, weight=1)
 
     ttk.Checkbutton(

@@ -36,7 +36,6 @@ Generate multiple quieter versions of an audio file for game audio tuning.
   - output folder
 - Optional analysis:
   - peak analysis can fill initial dB from ffmpeg `astats` using the configured headroom below 0 dB.
-  - peak scale can adjust the refined result before it is used as Initial dB; `1.00` uses the refined value directly, while `0.95` uses 95% of that dB value.
 - Displayed input metadata:
   - codec
   - bitrate
