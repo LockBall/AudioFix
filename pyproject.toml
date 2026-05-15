@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "audiofix"
+version = "0.1.0"
+description = "Batch loudness converter for generating quieter game audio variants."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [
+  { name = "LockBall" }
+]
+dependencies = []
+
+[project.scripts]
+audiofix = "audiofix.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
