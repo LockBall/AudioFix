@@ -29,13 +29,13 @@ Generate multiple quieter versions of an audio file for game audio tuning.
 - User-entered parameters:
   - minimum dB range
   - initial dB gain measured externally for the selected input file
-  - peak margin dB for optional peak analysis
+  - peak headroom dB for optional peak analysis
   - dB interval between files
   - Ogg Vorbis encoder mode: match source bitrate or choose a Vorbis quality level
   - overwrite behavior
   - output folder
 - Optional analysis:
-  - peak analysis can fill initial dB from ffmpeg `astats` and refine through a temporary Ogg encode so the encoded output peak lands closer to the requested margin.
+  - peak analysis can fill initial dB from ffmpeg `astats` using the configured headroom below 0 dB.
   - peak scale can adjust the refined result before it is used as Initial dB; `1.00` uses the refined value directly, while `0.95` uses 95% of that dB value.
 - Displayed input metadata:
   - codec
@@ -80,8 +80,7 @@ A microphone converts sound into audio, and a speaker converts audio into sound.
 ## Levels
 - Use the minimum dB range and dB interval to calculate output count.
 - Use the user-entered initial dB value as the first output gain, then apply dB interval reductions for later outputs.
-- The initial dB value can also be calculated from peak analysis as `0 - overall peak dB - peak margin dB`, then refined against a temporary encoded output; a margin of `9.00` targets a `-9.00 dB` peak.
-- Temporary files created during peak refinement are used only for measurement and are discarded automatically. Final outputs are always encoded from the original input file, not from the temporary files.
+- The initial dB value can also be calculated from peak analysis as `0 - overall peak dB - headroom dB`.
 - Most WoW sound files appear to be volume maximized already, so the initial workflow assumes the source is loud enough and generates quieter variants.
 - Automatic LUFS normalization and perceived-loudness analysis are out of scope for the first version.
 

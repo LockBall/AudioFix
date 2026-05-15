@@ -19,7 +19,7 @@ from audiofix.core.config import (
     DEFAULT_INITIAL_GAIN_DB_TEXT,
     DEFAULT_MAX_DB,
     DEFAULT_MIN_DB,
-    DEFAULT_PEAK_MARGIN_DB,
+    DEFAULT_PEAK_HEADROOM_DB,
     DEFAULT_PEAK_REFINEMENT_SCALE,
     DEFAULT_VORBIS_QUALITY,
     DEFAULT_WINDOW_HEIGHT,
@@ -35,10 +35,9 @@ from audiofix.core.ffmpeg import (
     build_ffmpeg_command,
     check_ffmpeg_tools,
     convert_plan_item,
-    gain_to_peak_margin_db,
+    gain_to_peak_headroom_db,
     measure_max_volume_db,
     probe_audio_info,
-    refine_gain_for_encoded_peak_with_history,
     scale_gain_db,
 )
 from audiofix.core.planning import (
@@ -122,7 +121,7 @@ def main() -> None:
     min_db_var = tk.StringVar(value="")
     initial_gain_db_var = tk.StringVar(value=DEFAULT_INITIAL_GAIN_DB_TEXT)
     db_interval_var = tk.StringVar(value="")
-    peak_margin_db_var = tk.StringVar(value="")
+    peak_headroom_db_var = tk.StringVar(value="")
     peak_refinement_scale_var = tk.StringVar(value="")
     step_count_var = tk.StringVar(value="")
     output_folder_var = tk.StringVar(value="")
@@ -147,7 +146,7 @@ def main() -> None:
     max_db_var.set(format_db(DEFAULT_MAX_DB))
     min_db_var.set(format_db(DEFAULT_MIN_DB))
     db_interval_var.set(format_db(DEFAULT_DB_INTERVAL))
-    peak_margin_db_var.set(format_db(DEFAULT_PEAK_MARGIN_DB))
+    peak_headroom_db_var.set(format_db(DEFAULT_PEAK_HEADROOM_DB))
     peak_refinement_scale_var.set(format_db(DEFAULT_PEAK_REFINEMENT_SCALE))
 
     def refresh_tool_status() -> None:
@@ -277,13 +276,16 @@ def main() -> None:
         except ValueError:
             return
 
-    def on_peak_margin_focus_out() -> None:
-        if not peak_margin_db_var.get().strip():
-            peak_margin_db_var.set(format_db(0.0))
-        format_decimal_var(peak_margin_db_var)
+    def reset_peak_analysis_results(message: str) -> None:
         last_refined_gain_db[0] = None
         peak_analysis_results_var.set("1 --")
-        status_var.set("Peak margin changed. Click Analyze peak to recalculate Initial dB.")
+        status_var.set(message)
+
+    def on_peak_headroom_focus_out() -> None:
+        if not peak_headroom_db_var.get().strip():
+            peak_headroom_db_var.set(format_db(DEFAULT_PEAK_HEADROOM_DB))
+        format_decimal_var(peak_headroom_db_var)
+        reset_peak_analysis_results("Headroom changed. Click Analyze peak to recalculate Initial dB.")
 
     def apply_refined_gain_scale() -> None:
         if last_refined_gain_db[0] is None:
@@ -364,59 +366,29 @@ def main() -> None:
         root.update_idletasks()
         try:
             max_volume_db = measure_max_volume_db(tool_status.ffmpeg.path, source_path)
-            peak_margin_db = float(peak_margin_db_var.get())
+            headroom_db = float(peak_headroom_db_var.get())
         except ValueError:
-            status_var.set("Enter a valid peak margin dB value.")
+            status_var.set("Enter a valid headroom dB value.")
             return
         except RuntimeError as error:
             status_var.set(f"Peak analysis failed: {error}")
             return
 
-        initial_gain_db = gain_to_peak_margin_db(max_volume_db, peak_margin_db)
+        initial_gain_db = gain_to_peak_headroom_db(max_volume_db, headroom_db)
         peak_analysis_results_var.set(f"1)    {format_db(initial_gain_db, signed=True)}")
-        peak_target_db = -abs(peak_margin_db)
-        status_var.set("Refining peak through Ogg encode...")
-        root.update_idletasks()
-        options = get_ffmpeg_options(audio_info, True)
-        try:
-            refined_gain_db, encoded_peak_db, refinement_history = refine_gain_for_encoded_peak_with_history(
-                ffmpeg_path=tool_status.ffmpeg.path,
-                source_path=source_path,
-                initial_gain_db=initial_gain_db,
-                peak_target_db=peak_target_db,
-                options=options,
-            )
-        except RuntimeError as error:
-            status_var.set(f"Peak refinement failed: {error}")
-            return
-
-        final_error_db = encoded_peak_db - peak_target_db
-        recommended_gain_db = refined_gain_db - final_error_db
-        last_refined_gain_db[0] = recommended_gain_db
-        peak_analysis_results_var.set(
-            "\n".join(
-                [
-                    f"1)    {format_db(initial_gain_db, signed=True)}",
-                    *[
-                        f"{result.pass_number + 1})    {format_db(result.encoded_peak_db, signed=True)}"
-                        for result in refinement_history
-                    ],
-                ]
-            )
-        )
+        peak_target_db = -abs(headroom_db)
+        last_refined_gain_db[0] = initial_gain_db
         try:
             peak_scale = float(peak_refinement_scale_var.get())
         except ValueError:
             status_var.set("Enter a valid peak scale value.")
             return
-        scaled_gain_db = scale_gain_db(recommended_gain_db, peak_scale)
+        scaled_gain_db = scale_gain_db(initial_gain_db, peak_scale)
         initial_gain_db_var.set(format_db(scaled_gain_db))
-        target_peak_db = -abs(peak_margin_db)
         status_var.set(
             f"Peak analysis: source max {format_db(max_volume_db)} dB, "
-            f"target {format_db(target_peak_db)} dB, "
-            f"encoded peak {format_db(encoded_peak_db)} dB, "
-            f"refined {format_db(recommended_gain_db)} dB, "
+            f"target {format_db(peak_target_db)} dB, "
+            f"headroom {format_db(abs(headroom_db))} dB, "
             f"scaled initial {format_db(scaled_gain_db)} dB."
         )
         update_command_preview()
@@ -637,7 +609,7 @@ def main() -> None:
         text="Analyze peak",
         command=analyze_peak,
     ).grid(row=2, column=0, sticky="w", pady=(6, 0))
-    ttk.Label(initial_gain_db_frame, text="Pass peaks").grid(
+    ttk.Label(initial_gain_db_frame, text="Peak gain").grid(
         row=2,
         column=1,
         sticky="w",
@@ -661,17 +633,17 @@ def main() -> None:
     peak_refinement_scale_entry.grid(row=4, column=0, sticky="w", pady=(CONTROL_TITLE_GAP_PX, 0))
     peak_refinement_scale_entry.bind("<FocusOut>", lambda _event: on_peak_scale_focus_out())
 
-    peak_margin_db_frame = ttk.Frame(settings_frame)
-    peak_margin_db_frame.grid(row=0, column=3, sticky="w")
-    ttk.Label(peak_margin_db_frame, text="Peak margin dB").grid(row=0, column=0, sticky="w")
-    peak_margin_db_entry = ttk.Entry(
-        peak_margin_db_frame,
-        textvariable=peak_margin_db_var,
+    peak_search_frame = ttk.Frame(settings_frame)
+    peak_search_frame.grid(row=0, column=3, sticky="w")
+    ttk.Label(peak_search_frame, text="Headroom dB").grid(row=0, column=0, sticky="w")
+    peak_headroom_db_entry = ttk.Entry(
+        peak_search_frame,
+        textvariable=peak_headroom_db_var,
         width=12,
         justify="right",
     )
-    peak_margin_db_entry.grid(row=1, column=0, sticky="w", pady=(CONTROL_TITLE_GAP_PX, 0))
-    peak_margin_db_entry.bind("<FocusOut>", lambda _event: on_peak_margin_focus_out())
+    peak_headroom_db_entry.grid(row=1, column=0, sticky="w", pady=(CONTROL_TITLE_GAP_PX, 8))
+    peak_headroom_db_entry.bind("<FocusOut>", lambda _event: on_peak_headroom_focus_out())
 
     min_db_var.trace_add("write", update_step_count)
     db_interval_var.trace_add("write", update_step_count)

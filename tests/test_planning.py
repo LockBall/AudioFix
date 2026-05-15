@@ -21,10 +21,12 @@ from audiofix.core.ffmpeg import (
     build_ffmpeg_command,
     check_ffmpeg_tools,
     convert_plan_item,
+    gain_to_peak_headroom_db,
     gain_to_peak_margin_db,
     measure_max_volume_db,
     refine_gain_for_encoded_peak,
     refine_gain_for_encoded_peak_with_history,
+    search_gain_for_encoded_peak,
     scale_gain_db,
 )
 
@@ -83,6 +85,8 @@ class FfmpegCommandTests(unittest.TestCase):
         [Parsed_astats_0] Peak level dB: 0.449314
         [Parsed_astats_0] Overall
         [Parsed_astats_0] Peak level dB: 0.813331
+        [Parsed_astats_0] Some later non-overall section
+        [Parsed_astats_0] Peak level dB: -12.000000
         """
 
         with mock.patch("audiofix.core.ffmpeg.subprocess.run", return_value=completed):
@@ -95,6 +99,9 @@ class FfmpegCommandTests(unittest.TestCase):
         self.assertEqual(gain_to_peak_margin_db(0.813331, 0.0), -0.813331)
         self.assertEqual(gain_to_peak_margin_db(0.813331, 0.2), -1.013331)
         self.assertEqual(gain_to_peak_margin_db(0.813331, 9.0), -9.813331)
+
+    def test_calculates_gain_to_peak_headroom(self) -> None:
+        self.assertEqual(gain_to_peak_headroom_db(0.813331, 0.01), -0.823331)
 
     def test_scales_refined_gain(self) -> None:
         self.assertEqual(scale_gain_db(-1.4, 1.0), -1.4)
@@ -146,6 +153,32 @@ class FfmpegCommandTests(unittest.TestCase):
         self.assertEqual([result.pass_number for result in history], [1, 2])
         self.assertEqual([result.encoded_peak_db for result in history], [0.15, 0.01])
         self.assertEqual([result.error_db for result in history], [0.15, 0.01])
+
+    def test_searches_down_to_first_acceptable_encoded_peak(self) -> None:
+        completed = mock.Mock()
+        completed.returncode = 0
+        completed.stdout = ""
+        completed.stderr = ""
+
+        with (
+            mock.patch("audiofix.core.ffmpeg.convert_plan_item", return_value=completed),
+            mock.patch("audiofix.core.ffmpeg.measure_max_volume_db", side_effect=[0.02, -0.007, -0.012]),
+        ):
+            gain_db, encoded_peak_db, attempts = search_gain_for_encoded_peak(
+                ffmpeg_path=Path("ffmpeg"),
+                source_path=Path("source.ogg"),
+                initial_gain_db=-0.82,
+                target_peak_db=-0.01,
+                tolerance_db=0.005,
+                step_db=0.005,
+                max_adjustment_db=0.05,
+                options=FfmpegOptions(audio_bitrate="112000", sample_rate=44100, channels=2),
+            )
+
+        self.assertAlmostEqual(gain_db, -0.83)
+        self.assertEqual(encoded_peak_db, -0.012)
+        self.assertEqual([attempt.encoded_peak_db for attempt in attempts], [0.02, -0.007, -0.012])
+        self.assertEqual([attempt.accepted for attempt in attempts], [False, False, True])
 
     def test_builds_goldwave_style_volume_filter_from_initial_db(self) -> None:
         plan = build_output_plan(
