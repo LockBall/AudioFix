@@ -20,6 +20,7 @@ dist/
 
 # Local generated audio/output logs.
 output/
+*_out/
 logs/
 
 # Bundled third-party binaries are tracked intentionally only when added.
