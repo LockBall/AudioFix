@@ -10,9 +10,14 @@ Shared memory for coding agents. Keep this file concise and durable: architectur
 
 ## Project Summary
 - The initial tool is a one-to-many batch loudness converter.
-- The user manually analyzes the source audio in a separate program, then enters a dB offset into AudioFix.
+- The user manually analyzes each source audio file in GoldWave or another program, then enters that file's initial dB gain value into AudioFix.
 - AudioFix generates multiple quieter output files from one source file.
-- The user controls the number of output files / steps and the dB interval between files.
+- The user controls the minimum dB range and dB interval; AudioFix calculates the number of output files / steps.
+- The initial dB value is user-entered per input file and is the gain for file `_0`; later files apply additional dB interval reductions.
+- To mimic the GoldWave workflow, use the manually determined dB value directly with ffmpeg's plain `volume` filter. Do not run automatic LUFS normalization or clipping management in AudioFix for the MVP.
+- Optional peak analysis uses ffmpeg `astats` overall `Peak level dB` to fill initial dB as `0 - peak dB - peak margin dB`; margin is positive headroom below 0 dB, so `9.00` targets a `-9.00 dB` peak. This matches GoldWave peak amplitude dB more closely than `volumedetect`.
+- Source audio metadata is displayed after input selection. User-facing builds should reuse source audio settings where possible instead of exposing codec/bitrate as creative options.
+- ffmpeg options currently exposed in the GUI: overwrite existing files.
 - Output files must have unique numbered names: `filename_0.ogg`, `filename_1.ogg`, `filename_2.ogg`, etc.
 - Each conversion run must generate a log file that records the source file, output file names, and dB levels used.
 
@@ -46,10 +51,11 @@ Shared memory for coding agents. Keep this file concise and durable: architectur
 - Prefer one deterministic conversion path for GUI-triggered and future CLI-triggered runs.
 - Avoid third-party Python runtime libraries for the MVP unless the standard library becomes a real blocker.
 - Prefer bundled `ffmpeg`/`ffprobe` binaries for user-facing builds; system ffmpeg fallback is acceptable for development.
+- Check `ffmpeg` and `ffprobe` availability with `-version` at startup and before conversion.
 - Runtime resource updates should be explicit maintenance actions, not silent downloads during conversion.
 
 ## GUI/Layout Rules
 - GUI elements should have a clear and consistent placement system.
-- MVP controls should include source file, output folder, dB offset, number of files / steps, dB interval, run action, progress/status, and log location.
+- MVP controls should include source file, displayed source audio metadata, output folder, minimum dB, initial dB, peak margin dB, dB interval, calculated number of files / steps, overwrite behavior, run action, progress/status, and log location.
 - Maintain basic light and dark themes with standard-library `ttk`; default to dark while keeping light available.
 - Use a traditional top menu bar for global app actions. Current pattern: `View > Theme` for theme selection and `Help > About AudioFix` for app information.

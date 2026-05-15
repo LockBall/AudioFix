@@ -4,9 +4,10 @@ from pathlib import Path
 
 APP_NAME = "AudioFix"
 DEFAULT_OUTPUT_EXTENSION = ".ogg"
-DEFAULT_DB_OFFSET = 0.0
-DEFAULT_STEP_COUNT = 21
-DEFAULT_DB_INTERVAL = -3.0
+DEFAULT_MIN_DB = -60.0
+DEFAULT_INITIAL_GAIN_DB_TEXT = ""
+DEFAULT_DB_INTERVAL = 3.0
+DEFAULT_PEAK_MARGIN_DB = 0.0
 
 
 @dataclass(frozen=True)
@@ -24,4 +25,3 @@ def get_runtime_paths(project_root: Path | None = None) -> RuntimePaths:
         vendor_root=vendor_root,
         ffmpeg_root=vendor_root / "ffmpeg",
     )
-

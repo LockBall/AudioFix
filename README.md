@@ -16,8 +16,8 @@ Generate multiple quieter versions of an audio file for game audio tuning.
 
 ## Purpose
 - Take one source audio file and export multiple files with different volume reductions.
-- Support manual analysis: the user determines the needed starting offset in a separate program and enters that value into AudioFix.
-- Let the user choose how many output files to generate and the dB interval between each output.
+- Support manual analysis: the user enters the initial dB gain value determined in GoldWave or another tool.
+- Let the user choose the minimum dB range and dB interval between outputs; AudioFix calculates the number of output files.
 - Generate a log file that records the source file, output files, and dB levels used.
 
 ## Design
@@ -27,12 +27,24 @@ Generate multiple quieter versions of an audio file for game audio tuning.
 - Keep the first version free of third-party Python runtime dependencies.
 - Prefer bundled `ffmpeg` and `ffprobe` binaries under `vendor/ffmpeg` so users do not need to install them manually.
 - User-entered parameters:
-  - dB offset
-  - number of output files / steps
+  - minimum dB range
+  - initial dB gain measured externally for the selected input file
+  - peak margin dB for optional peak analysis
   - dB interval between files
+  - overwrite behavior
   - output folder
+- Optional analysis:
+  - peak analysis can fill initial dB from ffmpeg `astats` so the source peak reaches the requested peak margin.
+- Displayed input metadata:
+  - codec
+  - bitrate
+  - sample rate
+  - channel count
+- Calculated parameters:
+  - number of output files / steps
 - Output files use unique numbered names: `filename_0.ogg`, `filename_1.ogg`, `filename_2.ogg`, etc.
 - Each run writes a log file as a reference for the dB levels used.
+- Conversion applies the user-entered initial dB value with ffmpeg's `volume` filter, applies later dB step reductions with `volume`, reuses detected source bitrate/sample rate/channel count, and exports Ogg Vorbis files.
 
 ## Project Structure
 - `src/audiofix/gui/`: Tkinter interface.
@@ -64,18 +76,23 @@ Audio (data) or (physical) Sound ?
 A microphone converts sound into audio, and a speaker converts audio into sound.
 
 ## Levels
-- Use dB gain changes for the first version.
+- Use the minimum dB range and dB interval to calculate output count.
+- Use the user-entered initial dB value as the first output gain, then apply dB interval reductions for later outputs.
+- The initial dB value can also be calculated from peak analysis as `0 - overall peak dB - peak margin dB`; a margin of `9.00` targets a `-9.00 dB` peak.
 - Most WoW sound files appear to be volume maximized already, so the initial workflow assumes the source is loud enough and generates quieter variants.
-- LUFS normalization and perceived-loudness workflows are out of scope for the first version.
+- Automatic LUFS normalization and perceived-loudness analysis are out of scope for the first version.
 
 ## Tools
 
 Utility scripts for maintaining bundled resources belong under `tools/`.
 
+Current scripts:
+
+- `tools/check_ffmpeg.py`: verify bundled or PATH ffmpeg/ffprobe.
+- `tools/install_ffmpeg.py`: download and install Windows ffmpeg/ffprobe into `vendor/ffmpeg/win-x64/bin/`.
+
 Planned scripts:
 
-- download or update ffmpeg/ffprobe for supported platforms
-- verify bundled binary versions
 - prepare standalone release artifacts
 
 ## Vendor Resources
@@ -99,3 +116,7 @@ vendor/
 Do not commit downloaded archives unless there is a deliberate release reason.
 The app should prefer bundled binaries first and can later fall back to system
 `ffmpeg` during development.
+
+At startup and before conversion, AudioFix checks both `ffmpeg` and `ffprobe`
+by running their `-version` commands. Runtime conversion does not download or
+update these tools automatically.

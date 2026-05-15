@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import math
 from pathlib import Path
 
 from audiofix.core.config import DEFAULT_OUTPUT_EXTENSION
@@ -9,6 +10,15 @@ class OutputPlanItem:
     index: int
     gain_db: float
     output_path: Path
+
+
+def calculate_step_count(min_db: float, db_interval: float) -> int:
+    if min_db >= 0:
+        raise ValueError("min_db must be less than 0")
+    if db_interval <= 0:
+        raise ValueError("db_interval must be greater than 0")
+
+    return math.floor(abs(min_db) / db_interval) + 1
 
 
 def build_output_plan(
@@ -33,4 +43,3 @@ def build_output_plan(
         )
         for index in range(step_count)
     ]
-

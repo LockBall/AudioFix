@@ -60,6 +60,15 @@ def apply_theme(root: tk.Tk, theme_name: str) -> Theme:
         foreground=theme.muted_foreground,
     )
     style.configure(
+        "Status.TLabel",
+        background=theme.field_background,
+        foreground=theme.foreground,
+        bordercolor=theme.border,
+        relief="solid",
+        borderwidth=1,
+        padding=(8, 4),
+    )
+    style.configure(
         "TButton",
         background=theme.field_background,
         foreground=theme.foreground,
@@ -71,6 +80,17 @@ def apply_theme(root: tk.Tk, theme_name: str) -> Theme:
     style.map(
         "TButton",
         background=[("active", theme.border), ("pressed", theme.border)],
+        foreground=[("disabled", theme.muted_foreground)],
+    )
+    style.configure(
+        "TCheckbutton",
+        background=theme.background,
+        foreground=theme.foreground,
+        focuscolor=theme.accent,
+    )
+    style.map(
+        "TCheckbutton",
+        background=[("active", theme.background)],
         foreground=[("disabled", theme.muted_foreground)],
     )
     style.configure(
