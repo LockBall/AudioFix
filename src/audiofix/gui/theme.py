@@ -139,4 +139,12 @@ def apply_theme(root: tk.Tk, theme_name: str) -> Theme:
         selectbackground=[("readonly", theme.field_background)],
         selectforeground=[("readonly", theme.field_foreground)],
     )
+    style.configure(
+        "Horizontal.TProgressbar",
+        background=theme.accent,
+        troughcolor=theme.field_background,
+        bordercolor=theme.border,
+        lightcolor=theme.accent,
+        darkcolor=theme.accent,
+    )
     return theme

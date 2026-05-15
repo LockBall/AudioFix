@@ -2,11 +2,13 @@
 
 ## 1. GUI Responsiveness
 
-- [ ] Move peak analysis off the Tkinter UI thread.
-- [ ] Move batch conversion off the Tkinter UI thread.
-- [ ] Keep UI controls responsive while ffmpeg work is running.
-- [ ] Add a progress bar so the GUI clearly indicates background work is active.
-- [ ] Update progress text per file during batch conversion.
+- [x] Move peak analysis off the Tkinter UI thread.
+- [x] Move batch conversion off the Tkinter UI thread.
+- [x] Keep UI controls responsive while ffmpeg work is running.
+- [x] Add a progress bar so the GUI clearly indicates background work is active.
+- [x] Update progress text per file during batch conversion.
+- [x] Write success/failure conversion logs with settings and per-file commands.
+- [x] Validate generated output files before marking them successful.
 
 ## 2. Conversion Safety
 
@@ -28,4 +30,3 @@
 
 - [ ] Split `app.py` into smaller modules when the next behavior change makes it worthwhile.
 - [ ] Consider separate modules for formatting helpers, widget builders, and event handlers.
-

@@ -5,6 +5,7 @@ in audiofix.core so the same behavior can later be reused by tests or a CLI.
 """
 
 import os
+import threading
 import tkinter as tk
 from pathlib import Path
 from tkinter import messagebox, filedialog
@@ -44,14 +45,22 @@ from audiofix.core.config import (
 from audiofix.core.ffmpeg import (
     FfmpegOptions,
     AudioInfo,
+    ToolStatus,
     build_ffmpeg_command,
     check_ffmpeg_tools,
-    convert_plan_item,
     gain_to_peak_headroom_db,
     measure_max_volume_db,
     probe_audio_info,
+    run_ffmpeg_command,
+    validate_output_file,
+)
+from audiofix.core.logging import (
+    ConversionLogItem,
+    ConversionLogSettings,
+    write_conversion_log,
 )
 from audiofix.core.planning import (
+    OutputPlanItem,
     build_output_plan,
     calculate_step_count,
 )
@@ -155,8 +164,11 @@ def main() -> None:
     ffmpeg_status_var = tk.StringVar(value="")
     ffprobe_status_var = tk.StringVar(value="")
     command_preview_var = tk.StringVar(value="ffmpeg command preview unavailable.")
+    progress_var = tk.DoubleVar(value=0)
     last_audio_info: list[AudioInfo | None] = [None]
     last_output_folder: list[Path | None] = [None]
+    peak_analysis_running = [False]
+    conversion_running = [False]
 
     def format_db(value: float, signed: bool = False) -> str:
         sign = "+" if signed else ""
@@ -169,9 +181,12 @@ def main() -> None:
 
     def update_tool_status():
         tool_status = check_ffmpeg_tools()
+        set_tool_status(tool_status)
+        return tool_status
+
+    def set_tool_status(tool_status: ToolStatus) -> None:
         ffmpeg_status_var.set(tool_status.ffmpeg.display_text())
         ffprobe_status_var.set(tool_status.ffprobe.display_text())
-        return tool_status
 
     def refresh_tool_status() -> None:
         update_tool_status()
@@ -332,6 +347,30 @@ def main() -> None:
         last_output_folder[0] = None
         open_output_button.state(["disabled"])
 
+    def set_peak_analysis_controls_enabled(enabled: bool) -> None:
+        state = ["!disabled"] if enabled else ["disabled"]
+        input_file_entry.state(state)
+        input_browse_button.state(state)
+        peak_headroom_db_entry.state(state)
+        encoder_mode_combobox.state(["readonly"] if enabled else ["disabled"])
+        analyze_peak_button.state(state)
+
+    def set_conversion_controls_enabled(enabled: bool) -> None:
+        state = ["!disabled"] if enabled else ["disabled"]
+        input_file_entry.state(state)
+        input_browse_button.state(state)
+        min_db_entry.state(state)
+        interval_db_entry.state(state)
+        peak_headroom_db_entry.state(state)
+        calculated_gain_db_entry.state(state)
+        analyze_peak_button.state(state)
+        encoder_mode_combobox.state(["readonly"] if enabled else ["disabled"])
+        quality_scale.configure(state="normal" if enabled else "disabled")
+        output_folder_entry.state(state)
+        output_browse_button.state(state)
+        overwrite_checkbutton.state(state)
+        run_conversion_button.state(state)
+
     def on_peak_headroom_focus_out() -> None:
         if not peak_headroom_db_var.get().strip():
             peak_headroom_db_var.set(format_db(DEFAULT_PEAK_HEADROOM_DB))
@@ -367,6 +406,10 @@ def main() -> None:
             update_command_preview()
 
     def analyze_peak() -> None:
+        if peak_analysis_running[0]:
+            status_var.set("Peak analysis is already running.")
+            return
+
         source_text = file_path_var.get().strip()
         if not source_text:
             status_var.set("Select an input file before analyzing peak.")
@@ -377,31 +420,96 @@ def main() -> None:
             status_var.set("Select a valid input file before analyzing peak.")
             return
 
-        tool_status = update_tool_status()
-        if not tool_status.ffmpeg.available or tool_status.ffmpeg.path is None:
-            status_var.set("ffmpeg unavailable; cannot analyze peak.")
-            return
-
-        audio_info = get_audio_info(source_path)
-        if audio_info is None:
-            status_var.set("Cannot read input audio settings before peak analysis.")
-            return
-        if ENCODER_MODE_LABELS[encoder_mode_choice_var.get()] == ENCODER_MODE_BITRATE and audio_info.bit_rate is None:
-            status_var.set("Input audio bitrate is unknown; cannot analyze peak with match-bitrate mode.")
-            return
-
-        status_var.set("Analyzing peak...")
-        root.update_idletasks()
         try:
-            max_volume_db = measure_max_volume_db(tool_status.ffmpeg.path, source_path)
             headroom_db = float(peak_headroom_db_var.get())
         except ValueError:
             status_var.set("Enter a valid headroom dB value.")
             return
-        except RuntimeError as error:
-            status_var.set(f"Peak analysis failed: {error}")
+
+        encoder_mode = ENCODER_MODE_LABELS[encoder_mode_choice_var.get()]
+        peak_analysis_running[0] = True
+        set_peak_analysis_controls_enabled(False)
+        status_var.set("Analyzing peak...")
+
+        thread = threading.Thread(
+            target=run_peak_analysis_worker,
+            args=(source_path, headroom_db, encoder_mode),
+            daemon=True,
+        )
+        thread.start()
+
+    def run_peak_analysis_worker(
+        source_path: Path,
+        headroom_db: float,
+        encoder_mode: str,
+    ) -> None:
+        tool_status: ToolStatus | None = None
+        try:
+            tool_status = check_ffmpeg_tools()
+            if not tool_status.ffmpeg.available or tool_status.ffmpeg.path is None:
+                raise RuntimeError("ffmpeg unavailable; cannot analyze peak.")
+            if not tool_status.ffprobe.available or tool_status.ffprobe.path is None:
+                raise RuntimeError("ffprobe unavailable; cannot read input audio settings.")
+
+            audio_info = probe_audio_info(tool_status.ffprobe.path, source_path)
+            if encoder_mode == ENCODER_MODE_BITRATE and audio_info.bit_rate is None:
+                raise RuntimeError("Input audio bitrate is unknown; cannot analyze peak with match-bitrate mode.")
+
+            max_volume_db = measure_max_volume_db(tool_status.ffmpeg.path, source_path)
+        except (RuntimeError, ValueError) as error:
+            error_message = str(error)
+            root.after(
+                0,
+                lambda error_message=error_message: finish_peak_analysis(
+                    source_path=source_path,
+                    headroom_db=headroom_db,
+                    encoder_mode=encoder_mode,
+                    tool_status=tool_status,
+                    audio_info=None,
+                    max_volume_db=None,
+                    error_message=error_message,
+                ),
+            )
             return
 
+        root.after(
+            0,
+            lambda: finish_peak_analysis(
+                source_path=source_path,
+                headroom_db=headroom_db,
+                encoder_mode=encoder_mode,
+                tool_status=tool_status,
+                audio_info=audio_info,
+                max_volume_db=max_volume_db,
+                error_message=None,
+            ),
+        )
+
+    def finish_peak_analysis(
+        source_path: Path,
+        headroom_db: float,
+        encoder_mode: str,
+        tool_status: ToolStatus | None,
+        audio_info: AudioInfo | None,
+        max_volume_db: float | None,
+        error_message: str | None,
+    ) -> None:
+        peak_analysis_running[0] = False
+        set_peak_analysis_controls_enabled(True)
+
+        if tool_status is not None:
+            set_tool_status(tool_status)
+
+        if error_message is not None:
+            status_var.set(f"Peak analysis failed: {error_message}")
+            return
+
+        if audio_info is None or max_volume_db is None:
+            status_var.set("Peak analysis failed: no result returned.")
+            return
+
+        audio_info_var.set(format_audio_info(audio_info))
+        last_audio_info[0] = audio_info
         calculated_gain_db = gain_to_peak_headroom_db(max_volume_db, headroom_db)
         raw_peak_var.set(f"Raw peak: {format_db(max_volume_db, signed=True)} dB")
         peak_target_db = -abs(headroom_db)
@@ -434,11 +542,20 @@ def main() -> None:
             status_var.set(f"Could not open FFmpeg folder: {error}")
 
     def run_conversion() -> None:
+        if peak_analysis_running[0]:
+            status_var.set("Wait for peak analysis to finish before running conversion.")
+            return
+        if conversion_running[0]:
+            status_var.set("Conversion is already running.")
+            return
+
         try:
             source_text = file_path_var.get().strip()
             output_text = output_folder_var.get().strip()
+            max_db = float(max_db_var.get())
             min_db = float(min_db_var.get())
             interval_db = float(interval_db_var.get())
+            headroom_db = float(peak_headroom_db_var.get())
             step_count = calculate_step_count(min_db=min_db, interval_db=interval_db)
         except ValueError as error:
             status_var.set(f"Invalid settings: {error}")
@@ -478,6 +595,9 @@ def main() -> None:
                 "vendor/ffmpeg/win-x64/bin or install them on PATH."
             )
             return
+        if tool_status.ffprobe.path is None:
+            status_var.set("ffprobe unavailable; cannot validate generated files.")
+            return
 
         output_dir.mkdir(parents=True, exist_ok=True)
         plan = build_output_plan(
@@ -494,24 +614,191 @@ def main() -> None:
             )
             return
         options = get_ffmpeg_options(audio_info, overwrite_var.get())
+        settings = ConversionLogSettings(
+            source_path=source_path,
+            output_dir=output_dir,
+            max_db=max_db,
+            min_db=min_db,
+            interval_db=interval_db,
+            raw_peak_db=parse_raw_peak_display(),
+            headroom_db=headroom_db,
+            calculated_gain_db=calculated_gain_db,
+            encoder_mode=encoder_mode_choice_var.get(),
+            vorbis_quality=float(vorbis_quality_var.get())
+            if ENCODER_MODE_LABELS[encoder_mode_choice_var.get()] == ENCODER_MODE_QUALITY
+            else None,
+            overwrite=overwrite_var.get(),
+        )
 
-        for item in plan:
-            status_var.set(f"Converting {item.output_path.name}...")
-            root.update_idletasks()
-            result = convert_plan_item(
-                ffmpeg_path=tool_status.ffmpeg.path,
+        conversion_running[0] = True
+        clear_generated_output_state()
+        progress_var.set(0)
+        progress_bar.configure(maximum=len(plan), value=0)
+        set_conversion_controls_enabled(False)
+        status_var.set(f"Starting conversion: 0 of {len(plan)} files.")
+
+        thread = threading.Thread(
+            target=run_conversion_worker,
+            args=(
+                tool_status.ffmpeg.path,
+                tool_status.ffprobe.path,
+                source_path,
+                output_dir,
+                plan,
+                options,
+                settings,
+            ),
+            daemon=True,
+        )
+        thread.start()
+
+    def parse_raw_peak_display() -> float | None:
+        prefix = "Raw peak:"
+        raw_peak_text = raw_peak_var.get()
+        if not raw_peak_text.startswith(prefix):
+            return None
+        value_text = raw_peak_text[len(prefix) :].strip().removesuffix(" dB")
+        if value_text == "--":
+            return None
+        try:
+            return float(value_text)
+        except ValueError:
+            return None
+
+    def display_command(command: list[str]) -> str:
+        display_parts = ["ffmpeg", *command[1:]]
+        return " ".join(f'"{part}"' if " " in part else part for part in display_parts)
+
+    def run_conversion_worker(
+        ffmpeg_path: Path,
+        ffprobe_path: Path,
+        source_path: Path,
+        output_dir: Path,
+        plan: list[OutputPlanItem],
+        options: FfmpegOptions,
+        settings: ConversionLogSettings,
+    ) -> None:
+        log_items: list[ConversionLogItem] = []
+        failure_message: str | None = None
+
+        for completed_count, item in enumerate(plan):
+            root.after(
+                0,
+                lambda completed_count=completed_count, item=item: update_conversion_progress(
+                    completed_count,
+                    len(plan),
+                    item.output_path.name,
+                ),
+            )
+            command = build_ffmpeg_command(
+                ffmpeg_path=ffmpeg_path,
                 source_path=source_path,
                 item=item,
                 options=options,
             )
+            result = run_ffmpeg_command(command)
             if result.returncode != 0:
-                error_text = result.stderr.strip() or result.stdout.strip()
-                status_var.set(f"ffmpeg failed on {item.output_path.name}: {error_text}")
-                return
+                error_text = result.stderr.strip() or result.stdout.strip() or "ffmpeg failed"
+                failure_message = f"{item.output_path.name}: {error_text}"
+                log_items.append(
+                    ConversionLogItem(
+                        plan_item=item,
+                        status="failed",
+                        message=error_text,
+                    )
+                )
+                break
 
-        last_output_folder[0] = output_dir
-        open_output_button.state(["!disabled"])
-        status_var.set(f"Generated {len(plan)} files in {output_dir}.")
+            try:
+                validate_output_file(ffprobe_path, item.output_path)
+            except (RuntimeError, ValueError) as error:
+                failure_message = f"{item.output_path.name}: {error}"
+                log_items.append(
+                    ConversionLogItem(
+                        plan_item=item,
+                        status="failed",
+                        message=str(error),
+                    )
+                )
+                break
+
+            log_items.append(
+                ConversionLogItem(
+                    plan_item=item,
+                    status="success",
+                    message="validated",
+                )
+            )
+            root.after(
+                0,
+                lambda completed_count=completed_count + 1: progress_var.set(completed_count),
+            )
+
+        success = failure_message is None and len(log_items) == len(plan)
+        log_path = output_dir / ("conversion_log.txt" if success else "conversion_failed_log.txt")
+        try:
+            write_conversion_log(
+                log_path=log_path,
+                settings=settings,
+                items=log_items,
+                success=success,
+                failure_message=failure_message,
+            )
+        except OSError as error:
+            if failure_message:
+                failure_message = f"{failure_message}; additionally failed to write log: {error}"
+            else:
+                failure_message = f"Generated files, but failed to write log: {error}"
+            success = False
+            log_path = output_dir / "conversion_failed_log.txt"
+            try:
+                write_conversion_log(
+                    log_path=log_path,
+                    settings=settings,
+                    items=log_items,
+                    success=False,
+                    failure_message=failure_message,
+                )
+            except OSError as failed_log_error:
+                failure_message = f"{failure_message}; failed to write failure log: {failed_log_error}"
+
+        root.after(
+            0,
+            lambda: finish_conversion(
+                output_dir=output_dir,
+                file_count=sum(1 for item in log_items if item.status == "success"),
+                total_count=len(plan),
+                success=success,
+                failure_message=failure_message,
+                log_path=log_path,
+            ),
+        )
+
+    def update_conversion_progress(completed_count: int, total_count: int, filename: str) -> None:
+        progress_var.set(completed_count)
+        status_var.set(f"Converting {completed_count + 1} of {total_count}: {filename}")
+
+    def finish_conversion(
+        output_dir: Path,
+        file_count: int,
+        total_count: int,
+        success: bool,
+        failure_message: str | None,
+        log_path: Path,
+    ) -> None:
+        conversion_running[0] = False
+        set_conversion_controls_enabled(True)
+        if success:
+            progress_var.set(total_count)
+            last_output_folder[0] = output_dir
+            open_output_button.state(["!disabled"])
+            status_var.set(f"Generated {total_count} files in {output_dir}. Log: {log_path.name}")
+            return
+
+        status_var.set(
+            f"Conversion failed after {file_count} of {total_count} files. "
+            f"Log: {log_path.name}. {failure_message or ''}".strip()
+        )
 
     ttk.Label(
         frame,
@@ -544,13 +831,15 @@ def main() -> None:
     input_frame.columnconfigure(1, weight=1)
 
     ttk.Label(input_frame, text="Input file").grid(row=0, column=0, sticky="w")
-    ttk.Entry(input_frame, textvariable=file_path_var, justify="left").grid(
+    input_file_entry = ttk.Entry(input_frame, textvariable=file_path_var, justify="left")
+    input_file_entry.grid(
         row=0,
         column=1,
         sticky="ew",
         padx=(FIELD_PAD_X_PX, FIELD_PAD_X_PX),
     )
-    ttk.Button(input_frame, text="Browse...", command=browse_file).grid(row=0, column=2, sticky="e")
+    input_browse_button = ttk.Button(input_frame, text="Browse...", command=browse_file)
+    input_browse_button.grid(row=0, column=2, sticky="e")
     input_meta_frame = ttk.Frame(input_frame)
     input_meta_frame.grid(
         row=1,
@@ -595,9 +884,9 @@ def main() -> None:
         sticky="w",
         pady=(CONTROL_TITLE_GAP_PX, RELATED_CONTROL_GAP_PX),
     )
-    add_db_entry(settings_frame, "Minimum dB", min_db_var, row=2, column=0)
+    min_db_entry = add_db_entry(settings_frame, "Minimum dB", min_db_var, row=2, column=0)
 
-    add_db_entry(
+    interval_db_entry = add_db_entry(
         settings_frame,
         "Interval dB",
         interval_db_var,
@@ -607,7 +896,7 @@ def main() -> None:
     )
     ttk.Label(
         settings_frame,
-        text="Number of files",
+        text="Files Count",
         anchor="center",
         width=DB_FIELD_WIDTH_CHARS,
     ).grid(row=2, column=1, sticky="w")
@@ -628,7 +917,7 @@ def main() -> None:
     )
     peak_headroom_db_entry.bind("<FocusOut>", lambda _event: on_peak_headroom_focus_out())
 
-    add_db_entry(
+    calculated_gain_db_entry = add_db_entry(
         settings_frame,
         "- (Raw + Head) dB",
         calculated_gain_db_var,
@@ -636,11 +925,12 @@ def main() -> None:
         column=3,
         label_width=CALCULATED_GAIN_LABEL_WIDTH_CHARS,
     )
-    ttk.Button(
+    analyze_peak_button = ttk.Button(
         settings_frame,
         text="Analyze peak",
         command=analyze_peak,
-    ).grid(row=3, column=3, sticky="w", pady=(CONTROL_TITLE_GAP_PX, 0))
+    )
+    analyze_peak_button.grid(row=3, column=3, sticky="w", pady=(CONTROL_TITLE_GAP_PX, 0))
 
     min_db_var.trace_add("write", update_step_count)
     interval_db_var.trace_add("write", update_step_count)
@@ -657,13 +947,14 @@ def main() -> None:
     encoder_frame.grid(row=4, column=0, sticky="ew", pady=(APP_ROW_GAP_PX, 0))
     encoder_frame.columnconfigure(1, weight=1)
     ttk.Label(encoder_frame, text="Encoder mode").grid(row=0, column=0, sticky="w")
-    ttk.Combobox(
+    encoder_mode_combobox = ttk.Combobox(
         encoder_frame,
         textvariable=encoder_mode_choice_var,
         values=tuple(ENCODER_MODE_LABELS),
         state="readonly",
         width=ENCODER_MODE_WIDTH_CHARS,
-    ).grid(row=1, column=0, sticky="nw", pady=(CONTROL_TITLE_GAP_PX, 0))
+    )
+    encoder_mode_combobox.grid(row=1, column=0, sticky="nw", pady=(CONTROL_TITLE_GAP_PX, 0))
     quality_scale_frame = ttk.Frame(encoder_frame)
     quality_scale_frame.grid(row=0, column=1, rowspan=2, sticky="ew", padx=(ENCODER_SCALE_PAD_X_PX, 0))
     ttk.Label(
@@ -684,7 +975,7 @@ def main() -> None:
         )
         quality_label.grid(row=0, column=column, sticky="ew")
         vorbis_quality_labels.append(quality_label)
-    tk.Scale(
+    quality_scale = tk.Scale(
         quality_scale_frame,
         variable=vorbis_quality_var,
         from_=min(VORBIS_QUALITY_VALUES),
@@ -694,7 +985,8 @@ def main() -> None:
         showvalue=False,
         length=VORBIS_SCALE_LENGTH_PX,
         highlightthickness=0,
-    ).grid(row=1, column=1, columnspan=len(VORBIS_QUALITY_VALUES), sticky="ew")
+    )
+    quality_scale.grid(row=1, column=1, columnspan=len(VORBIS_QUALITY_VALUES), sticky="ew")
     update_vorbis_quality_markers()
 
     command_frame = ttk.Frame(frame)
@@ -719,27 +1011,31 @@ def main() -> None:
     output_frame.columnconfigure(1, weight=1)
 
     ttk.Label(output_frame, text="Output folder").grid(row=0, column=0, sticky="w")
-    ttk.Entry(
+    output_folder_entry = ttk.Entry(
         output_frame,
         textvariable=output_folder_var,
         justify="left",
-    ).grid(row=0, column=1, sticky="ew", padx=(FIELD_PAD_X_PX, FIELD_PAD_X_PX))
-    ttk.Button(
+    )
+    output_folder_entry.grid(row=0, column=1, sticky="ew", padx=(FIELD_PAD_X_PX, FIELD_PAD_X_PX))
+    output_browse_button = ttk.Button(
         output_frame,
         text="Browse...",
         command=browse_output_folder,
-    ).grid(row=0, column=2, sticky="e")
+    )
+    output_browse_button.grid(row=0, column=2, sticky="e")
 
     action_frame = ttk.Frame(frame)
     action_frame.grid(row=7, column=0, sticky="ew", pady=(APP_ROW_GAP_PX, 0))
     action_frame.columnconfigure(0, weight=1)
 
-    ttk.Checkbutton(
+    overwrite_checkbutton = ttk.Checkbutton(
         action_frame,
         text="Overwrite existing files",
         variable=overwrite_var,
-    ).grid(row=0, column=1, sticky="e", padx=(BUTTON_PAD_X_PX, 0))
-    ttk.Button(action_frame, text="Run conversion", command=run_conversion).grid(
+    )
+    overwrite_checkbutton.grid(row=0, column=1, sticky="e", padx=(BUTTON_PAD_X_PX, 0))
+    run_conversion_button = ttk.Button(action_frame, text="Run Conversion", command=run_conversion)
+    run_conversion_button.grid(
         row=0,
         column=2,
         sticky="e",
@@ -757,6 +1053,12 @@ def main() -> None:
         padx=(BUTTON_PAD_X_PX, 0),
     )
     open_output_button.state(["disabled"])
+    progress_bar = ttk.Progressbar(
+        action_frame,
+        variable=progress_var,
+        mode="determinate",
+    )
+    progress_bar.grid(row=1, column=0, columnspan=4, sticky="ew", pady=(RELATED_CONTROL_GAP_PX, 0))
 
     refresh_tool_status()
 

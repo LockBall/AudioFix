@@ -276,6 +276,14 @@ def convert_plan_item(
     return run_ffmpeg_command(command)
 
 
+def validate_output_file(ffprobe_path: Path, output_path: Path) -> None:
+    if not output_path.is_file():
+        raise RuntimeError("output file was not created")
+    if output_path.stat().st_size <= 0:
+        raise RuntimeError("output file is empty")
+    probe_audio_info(ffprobe_path, output_path)
+
+
 def run_ffmpeg_command(command: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         command,

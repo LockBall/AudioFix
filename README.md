@@ -18,6 +18,7 @@ Generate multiple quieter versions of an audio file for game audio tuning.
 - Take one source audio file and export multiple files with different volume reductions.
 - Support peak analysis: AudioFix measures the source peak with ffmpeg and calculates the first gain value from raw peak plus headroom.
 - Let the user choose the minimum dB range and interval dB between outputs; AudioFix calculates the number of output files.
+- Write a success or failure log that records the settings, generated files, validation status, and ffmpeg commands.
 
 ## Design
 - WoW's files are Ogg Vorbis, so the initial target output format is Ogg Vorbis.
@@ -45,10 +46,11 @@ Generate multiple quieter versions of an audio file for game audio tuning.
   - number of output files / steps
 - Output files use unique numbered names: `filename_0.ogg`, `filename_1.ogg`, `filename_2.ogg`, etc.
 - Conversion applies the calculated gain with ffmpeg's `volume` filter, applies later interval reductions with `volume`, reuses detected source sample rate/channel count, and exports Ogg Vorbis files. The default encoder mode uses Vorbis quality; match-source-bitrate mode uses the detected input bitrate when available.
+- Successful runs write `conversion_log.txt`; failed runs write `conversion_failed_log.txt`.
 
 ## Project Structure
 - `src/audiofix/gui/`: Tkinter interface.
-- `src/audiofix/core/`: conversion planning, naming, ffmpeg command generation, and configuration.
+- `src/audiofix/core/`: conversion planning, naming, ffmpeg command generation, conversion logging, and configuration.
 - `vendor/ffmpeg/`: bundled ffmpeg/ffprobe resources.
 - `tools/`: maintenance scripts for bundled resources and release prep.
 - `docs/`: project notes that are more detailed than the README.

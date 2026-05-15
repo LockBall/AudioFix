@@ -15,6 +15,7 @@ from audiofix.core.planning import (
 
 from audiofix.core.config import ENCODER_MODE_BITRATE, ENCODER_MODE_QUALITY
 from audiofix.core.ffmpeg import (
+    AudioInfo,
     BinaryStatus,
     FfmpegOptions,
     build_audio_filter,
@@ -23,6 +24,12 @@ from audiofix.core.ffmpeg import (
     convert_plan_item,
     gain_to_peak_headroom_db,
     measure_max_volume_db,
+    validate_output_file,
+)
+from audiofix.core.logging import (
+    ConversionLogItem,
+    ConversionLogSettings,
+    build_conversion_log_lines,
 )
 
 
@@ -251,6 +258,76 @@ class FfmpegCommandTests(unittest.TestCase):
                 str(Path("out/source_0.ogg")),
             ]
         )
+
+    def test_validates_output_file_with_ffprobe(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "output.ogg"
+            output_path.write_bytes(b"audio")
+
+            with mock.patch(
+                "audiofix.core.ffmpeg.probe_audio_info",
+                return_value=AudioInfo(
+                    codec_name="vorbis",
+                    bit_rate=160000,
+                    sample_rate=44100,
+                    channels=2,
+                ),
+            ) as probe_audio_info:
+                validate_output_file(Path("ffprobe"), output_path)
+
+        probe_audio_info.assert_called_once_with(Path("ffprobe"), output_path)
+
+    def test_rejects_empty_output_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "output.ogg"
+            output_path.write_bytes(b"")
+
+            with self.assertRaises(RuntimeError):
+                validate_output_file(Path("ffprobe"), output_path)
+
+
+class ConversionLogTests(unittest.TestCase):
+    def test_builds_failed_conversion_log_lines(self) -> None:
+        plan = build_output_plan(
+            source_path=Path("source.ogg"),
+            output_dir=Path("out"),
+            db_offset=-1.5,
+            step_count=1,
+            interval_db=-3.0,
+        )
+        settings = ConversionLogSettings(
+            source_path=Path("source.ogg"),
+            output_dir=Path("out"),
+            max_db=0.0,
+            min_db=-60.0,
+            interval_db=3.0,
+            raw_peak_db=1.0,
+            headroom_db=0.5,
+            calculated_gain_db=-1.5,
+            encoder_mode="Vorbis Quality",
+            vorbis_quality=5.0,
+            overwrite=False,
+        )
+
+        lines = build_conversion_log_lines(
+            settings=settings,
+            items=[
+                ConversionLogItem(
+                    plan_item=plan[0],
+                    status="failed",
+                    message="ffmpeg failed",
+                )
+            ],
+            success=False,
+            failure_message="source_0.ogg: ffmpeg failed",
+        )
+
+        log_text = "\n".join(lines)
+        self.assertIn("Status: failed", log_text)
+        self.assertIn("source_0.ogg: ffmpeg failed", log_text)
+        self.assertIn("index\toutput_file\tgain_db\tstatus\tmessage", log_text)
+        self.assertIn("0\tsource_0.ogg\t-1.500\tfailed\tffmpeg failed", log_text)
+        self.assertNotIn("out/source_0.ogg", log_text)
 
 
 if __name__ == "__main__":
