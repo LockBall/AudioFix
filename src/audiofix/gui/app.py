@@ -16,7 +16,8 @@ from audiofix.core.config import (
     CONTROL_TITLE_GAP_PX,
     COMPACT_SECTION_ROW_GAP_PX,
     DB_DISPLAY_DECIMALS,
-    DEFAULT_DB_INTERVAL,
+    DB_FIELD_WIDTH_CHARS,
+    DEFAULT_INTERVAL_DB,
     DEFAULT_ENCODER_MODE,
     DEFAULT_INITIAL_GAIN_DB_TEXT,
     DEFAULT_MAX_DB,
@@ -25,9 +26,17 @@ from audiofix.core.config import (
     DEFAULT_VORBIS_QUALITY,
     DEFAULT_WINDOW_HEIGHT,
     DEFAULT_WINDOW_WIDTH,
+    BUTTON_PAD_X_PX,
+    CALCULATED_GAIN_LABEL_WIDTH_CHARS,
     ENCODER_MODE_BITRATE,
     ENCODER_MODE_QUALITY,
+    ENCODER_MODE_WIDTH_CHARS,
+    DB_LABEL_WIDTH_CHARS,
+    ENCODER_SCALE_PAD_X_PX,
+    FIELD_PAD_X_PX,
     RELATED_CONTROL_GAP_PX,
+    SETTINGS_COLUMN_COUNT,
+    VORBIS_SCALE_LENGTH_PX,
     VORBIS_QUALITY_BITRATES,
     get_runtime_paths,
 )
@@ -53,6 +62,16 @@ ENCODER_MODE_LABELS = {
     "Match Source Bitrate": ENCODER_MODE_BITRATE,
 }
 ENCODER_MODE_NAMES = {value: label for label, value in ENCODER_MODE_LABELS.items()}
+
+
+def format_quality_value(quality: float) -> str:
+    return f"{quality:g}"
+
+
+def format_quality_bitrate(quality: float) -> str:
+    if quality.is_integer():
+        return VORBIS_QUALITY_BITRATES[int(quality)].split()[0]
+    return ""
 
 
 def build_menu(root: tk.Tk, theme_var: tk.StringVar) -> tk.Menu:
@@ -121,11 +140,12 @@ def main() -> None:
     max_db_var = tk.StringVar(value="")
     min_db_var = tk.StringVar(value="")
     initial_gain_db_var = tk.StringVar(value=DEFAULT_INITIAL_GAIN_DB_TEXT)
-    db_interval_var = tk.StringVar(value="")
+    interval_db_var = tk.StringVar(value="")
     peak_headroom_db_var = tk.StringVar(value="")
     step_count_var = tk.StringVar(value="")
     output_folder_var = tk.StringVar(value="")
     audio_info_var = tk.StringVar(value="Audio info: select an input file.")
+    raw_peak_var = tk.StringVar(value="Raw peak: --")
     overwrite_var = tk.BooleanVar(value=False)
     encoder_mode_choice_var = tk.StringVar(value=ENCODER_MODE_NAMES[DEFAULT_ENCODER_MODE])
     vorbis_quality_var = tk.DoubleVar(value=DEFAULT_VORBIS_QUALITY)
@@ -134,7 +154,6 @@ def main() -> None:
     ffmpeg_status_var = tk.StringVar(value="")
     ffprobe_status_var = tk.StringVar(value="")
     command_preview_var = tk.StringVar(value="ffmpeg command preview unavailable.")
-    peak_analysis_results_var = tk.StringVar(value="1 --")
     last_audio_info: list[AudioInfo | None] = [None]
     last_output_folder: list[Path | None] = [None]
 
@@ -144,13 +163,17 @@ def main() -> None:
 
     max_db_var.set(format_db(DEFAULT_MAX_DB))
     min_db_var.set(format_db(DEFAULT_MIN_DB))
-    db_interval_var.set(format_db(DEFAULT_DB_INTERVAL))
+    interval_db_var.set(format_db(DEFAULT_INTERVAL_DB))
     peak_headroom_db_var.set(format_db(DEFAULT_PEAK_HEADROOM_DB))
 
-    def refresh_tool_status() -> None:
+    def update_tool_status():
         tool_status = check_ffmpeg_tools()
         ffmpeg_status_var.set(tool_status.ffmpeg.display_text())
         ffprobe_status_var.set(tool_status.ffprobe.display_text())
+        return tool_status
+
+    def refresh_tool_status() -> None:
+        update_tool_status()
 
     def format_audio_info(info: AudioInfo) -> str:
         bit_rate = f"{round(info.bit_rate / 1000)} kbps" if info.bit_rate else "unknown bitrate"
@@ -159,9 +182,7 @@ def main() -> None:
         return f"Audio info: {info.codec_name}, {bit_rate}, {sample_rate}, {channels}"
 
     def get_audio_info(source_path: Path) -> AudioInfo | None:
-        tool_status = check_ffmpeg_tools()
-        ffmpeg_status_var.set(tool_status.ffmpeg.display_text())
-        ffprobe_status_var.set(tool_status.ffprobe.display_text())
+        tool_status = update_tool_status()
         if not tool_status.ffprobe.available or tool_status.ffprobe.path is None:
             error = tool_status.ffprobe.error or "ffprobe not found"
             audio_info_var.set(f"Audio info: {error}.")
@@ -180,20 +201,12 @@ def main() -> None:
         try:
             step_count = calculate_step_count(
                 min_db=float(min_db_var.get()),
-                db_interval=float(db_interval_var.get()),
+                interval_db=float(interval_db_var.get()),
             )
         except ValueError:
             step_count_var.set("Invalid")
             return
         step_count_var.set(str(step_count))
-
-    def format_quality_value(quality: float) -> str:
-        return f"{quality:g}"
-
-    def format_quality_bitrate(quality: float) -> str:
-        if quality.is_integer():
-            return VORBIS_QUALITY_BITRATES[int(quality)].split()[0]
-        return ""
 
     def update_vorbis_quality_markers(*_: object) -> None:
         selected_quality = round(vorbis_quality_var.get() * 2) / 2
@@ -231,7 +244,7 @@ def main() -> None:
             command_preview_var.set("ffmpeg command preview unavailable.")
             return
 
-        tool_status = check_ffmpeg_tools()
+        tool_status = update_tool_status()
         if not tool_status.ffmpeg.available or tool_status.ffmpeg.path is None:
             command_preview_var.set("ffmpeg command preview unavailable: ffmpeg missing.")
             return
@@ -239,13 +252,13 @@ def main() -> None:
         try:
             initial_gain_db = float(initial_gain_db_var.get())
         except ValueError:
-            command_preview_var.set("ffmpeg command preview unavailable: enter Initial dB.")
+            command_preview_var.set("ffmpeg command preview unavailable: enter calculated peak gain.")
             return
 
         try:
-            db_interval = float(db_interval_var.get())
+            interval_db = float(interval_db_var.get())
         except ValueError:
-            command_preview_var.set("ffmpeg command preview unavailable: enter dB interval.")
+            command_preview_var.set("ffmpeg command preview unavailable: enter interval dB.")
             return
 
         source_path = Path(source_text)
@@ -255,7 +268,7 @@ def main() -> None:
             output_dir=output_dir,
             db_offset=initial_gain_db,
             step_count=1,
-            db_interval=-abs(db_interval),
+            interval_db=-abs(interval_db),
         )
         command = build_ffmpeg_command(
             ffmpeg_path=tool_status.ffmpeg.path,
@@ -274,15 +287,55 @@ def main() -> None:
         except ValueError:
             return
 
-    def reset_peak_analysis_results(message: str) -> None:
-        peak_analysis_results_var.set("1 --")
+    def add_db_entry(
+        parent: ttk.Frame,
+        label: str,
+        value_var: tk.StringVar,
+        row: int,
+        column: int,
+        bottom_gap: int = 0,
+        label_anchor: str = "center",
+        label_sticky: str = "w",
+        label_width: int = DB_LABEL_WIDTH_CHARS,
+    ) -> ttk.Entry:
+        ttk.Label(
+            parent,
+            text=label,
+            anchor=label_anchor,
+            width=label_width,
+        ).grid(
+            row=row,
+            column=column,
+            sticky=label_sticky,
+        )
+        entry = ttk.Entry(
+            parent,
+            textvariable=value_var,
+            width=DB_FIELD_WIDTH_CHARS,
+            justify="right",
+        )
+        entry.grid(
+            row=row + 1,
+            column=column,
+            sticky="w",
+            pady=(CONTROL_TITLE_GAP_PX, bottom_gap),
+        )
+        entry.bind("<FocusOut>", lambda _event: format_decimal_var(value_var))
+        return entry
+
+    def reset_peak_analysis(message: str) -> None:
+        raw_peak_var.set("Raw peak: --")
         status_var.set(message)
+
+    def clear_generated_output_state() -> None:
+        last_output_folder[0] = None
+        open_output_button.state(["disabled"])
 
     def on_peak_headroom_focus_out() -> None:
         if not peak_headroom_db_var.get().strip():
             peak_headroom_db_var.set(format_db(DEFAULT_PEAK_HEADROOM_DB))
         format_decimal_var(peak_headroom_db_var)
-        reset_peak_analysis_results("Headroom changed. Click Analyze peak to recalculate Initial dB.")
+        reset_peak_analysis("Headroom changed. Click Analyze peak to recalculate peak gain.")
 
     def browse_file() -> None:
         path = filedialog.askopenfilename(
@@ -298,9 +351,8 @@ def main() -> None:
             file_path_var.set(str(input_path))
             output_folder_var.set(str(input_path.with_name(f"{input_path.stem}_out")))
             last_audio_info[0] = None
-            peak_analysis_results_var.set("1 --")
-            last_output_folder[0] = None
-            open_output_button.state(["disabled"])
+            raw_peak_var.set("Raw peak: --")
+            clear_generated_output_state()
             analyze_peak()
 
     def browse_output_folder() -> None:
@@ -310,8 +362,7 @@ def main() -> None:
         )
         if path:
             output_folder_var.set(str(Path(path)))
-            last_output_folder[0] = None
-            open_output_button.state(["disabled"])
+            clear_generated_output_state()
             update_command_preview()
 
     def analyze_peak() -> None:
@@ -325,9 +376,7 @@ def main() -> None:
             status_var.set("Select a valid input file before analyzing peak.")
             return
 
-        tool_status = check_ffmpeg_tools()
-        ffmpeg_status_var.set(tool_status.ffmpeg.display_text())
-        ffprobe_status_var.set(tool_status.ffprobe.display_text())
+        tool_status = update_tool_status()
         if not tool_status.ffmpeg.available or tool_status.ffmpeg.path is None:
             status_var.set("ffmpeg unavailable; cannot analyze peak.")
             return
@@ -353,7 +402,7 @@ def main() -> None:
             return
 
         initial_gain_db = gain_to_peak_headroom_db(max_volume_db, headroom_db)
-        peak_analysis_results_var.set(f"1)    {format_db(initial_gain_db, signed=True)}")
+        raw_peak_var.set(f"Raw peak: {format_db(max_volume_db, signed=True)} dB")
         peak_target_db = -abs(headroom_db)
         initial_gain_db_var.set(format_db(initial_gain_db))
         status_var.set(
@@ -373,9 +422,7 @@ def main() -> None:
         os.startfile(str(output_dir))
 
     def open_ffmpeg_folder() -> None:
-        tool_status = check_ffmpeg_tools()
-        ffmpeg_status_var.set(tool_status.ffmpeg.display_text())
-        ffprobe_status_var.set(tool_status.ffprobe.display_text())
+        tool_status = update_tool_status()
         if not tool_status.ffmpeg.available or tool_status.ffmpeg.path is None:
             status_var.set("FFmpeg folder unavailable: ffmpeg is missing.")
             return
@@ -390,8 +437,8 @@ def main() -> None:
             source_text = file_path_var.get().strip()
             output_text = output_folder_var.get().strip()
             min_db = float(min_db_var.get())
-            db_interval = float(db_interval_var.get())
-            step_count = calculate_step_count(min_db=min_db, db_interval=db_interval)
+            interval_db = float(interval_db_var.get())
+            step_count = calculate_step_count(min_db=min_db, interval_db=interval_db)
         except ValueError as error:
             status_var.set(f"Invalid settings: {error}")
             return
@@ -399,7 +446,7 @@ def main() -> None:
         try:
             initial_gain_db = float(initial_gain_db_var.get())
         except ValueError:
-            status_var.set("Enter the initial dB value determined in GoldWave.")
+            status_var.set("Analyze peak or enter the calculated peak gain.")
             return
 
         if not source_text:
@@ -414,8 +461,7 @@ def main() -> None:
         if not source_path.is_file():
             status_var.set("Select a valid input file.")
             return
-        last_output_folder[0] = None
-        open_output_button.state(["disabled"])
+        clear_generated_output_state()
         audio_info = get_audio_info(source_path)
         if audio_info is None:
             status_var.set("Cannot read input audio settings with ffprobe.")
@@ -424,9 +470,7 @@ def main() -> None:
             status_var.set("Input audio bitrate is unknown; conversion stopped to avoid changing it.")
             return
 
-        tool_status = check_ffmpeg_tools()
-        ffmpeg_status_var.set(tool_status.ffmpeg.display_text())
-        ffprobe_status_var.set(tool_status.ffprobe.display_text())
+        tool_status = update_tool_status()
         if not tool_status.available or tool_status.ffmpeg.path is None:
             status_var.set(
                 "ffmpeg/ffprobe unavailable. Add both under "
@@ -440,7 +484,7 @@ def main() -> None:
             output_dir=output_dir,
             db_offset=initial_gain_db,
             step_count=step_count,
-            db_interval=-abs(db_interval),
+            interval_db=-abs(interval_db),
         )
         existing_outputs = [item.output_path for item in plan if item.output_path.exists()]
         if existing_outputs and not overwrite_var.get():
@@ -491,7 +535,7 @@ def main() -> None:
         row=1,
         column=1,
         sticky="e",
-        padx=(8, 0),
+        padx=(BUTTON_PAD_X_PX, 0),
     )
 
     input_frame = ttk.Frame(frame)
@@ -503,103 +547,104 @@ def main() -> None:
         row=0,
         column=1,
         sticky="ew",
-        padx=(8, 8),
+        padx=(FIELD_PAD_X_PX, FIELD_PAD_X_PX),
     )
     browse_btn = ttk.Button(input_frame, text="Browse...", command=browse_file)
     browse_btn.grid(row=0, column=2, sticky="e")
-    ttk.Label(input_frame, textvariable=audio_info_var, style="Muted.TLabel").grid(
+    input_meta_frame = ttk.Frame(input_frame)
+    input_meta_frame.grid(
         row=1,
         column=1,
         columnspan=2,
-        sticky="w",
+        sticky="ew",
         pady=(COMPACT_SECTION_ROW_GAP_PX, 0),
+    )
+    for column in range(SETTINGS_COLUMN_COUNT):
+        input_meta_frame.columnconfigure(column, weight=1, uniform="settings")
+    ttk.Label(input_meta_frame, textvariable=audio_info_var, style="Muted.TLabel").grid(
+        row=0,
+        column=0,
+        columnspan=2,
+        sticky="w",
+    )
+    ttk.Label(
+        input_meta_frame,
+        textvariable=raw_peak_var,
+        style="Muted.TLabel",
+        anchor="w",
+    ).grid(
+        row=0,
+        column=2,
+        sticky="ew",
     )
 
     settings_frame = ttk.Frame(frame)
     settings_frame.grid(row=2, column=0, sticky="new", pady=(APP_ROW_GAP_PX, 0))
-    for column in range(4):
+    for column in range(SETTINGS_COLUMN_COUNT):
         settings_frame.columnconfigure(column, weight=1, uniform="settings")
 
-    ttk.Label(settings_frame, text="Maximum dB").grid(row=0, column=0, sticky="w")
-    ttk.Label(settings_frame, textvariable=max_db_var, width=12, anchor="e").grid(
+    ttk.Label(
+        settings_frame,
+        text="Maximum dB",
+        anchor="center",
+        width=DB_FIELD_WIDTH_CHARS,
+    ).grid(row=0, column=0, sticky="w")
+    ttk.Label(settings_frame, textvariable=max_db_var, width=DB_FIELD_WIDTH_CHARS, anchor="e").grid(
         row=1,
         column=0,
         sticky="w",
         pady=(CONTROL_TITLE_GAP_PX, RELATED_CONTROL_GAP_PX),
     )
-    ttk.Label(settings_frame, text="Minimum dB").grid(row=2, column=0, sticky="w")
-    min_db_entry = ttk.Entry(
-        settings_frame,
-        textvariable=min_db_var,
-        width=12,
-        justify="right",
-    )
-    min_db_entry.grid(
-        row=3,
-        column=0,
-        sticky="w",
-        pady=(CONTROL_TITLE_GAP_PX, 0),
-    )
-    min_db_entry.bind("<FocusOut>", lambda _event: format_decimal_var(min_db_var))
+    add_db_entry(settings_frame, "Minimum dB", min_db_var, row=2, column=0)
 
-    ttk.Label(settings_frame, text="dB interval").grid(row=0, column=1, sticky="w")
-    db_interval_entry = ttk.Entry(
+    add_db_entry(
         settings_frame,
-        textvariable=db_interval_var,
-        width=12,
-        justify="right",
+        "Interval dB",
+        interval_db_var,
+        row=0,
+        column=1,
+        bottom_gap=RELATED_CONTROL_GAP_PX,
     )
-    db_interval_entry.grid(row=1, column=1, sticky="w", pady=(CONTROL_TITLE_GAP_PX, RELATED_CONTROL_GAP_PX))
-    db_interval_entry.bind("<FocusOut>", lambda _event: format_decimal_var(db_interval_var))
-    ttk.Label(settings_frame, text="Number of files").grid(row=2, column=1, sticky="w")
-    ttk.Label(settings_frame, textvariable=step_count_var, width=12, anchor="e").grid(
+    ttk.Label(
+        settings_frame,
+        text="Number of files",
+        anchor="center",
+        width=DB_FIELD_WIDTH_CHARS,
+    ).grid(row=2, column=1, sticky="w")
+    ttk.Label(settings_frame, textvariable=step_count_var, width=DB_FIELD_WIDTH_CHARS, anchor="e").grid(
         row=3,
         column=1,
         sticky="w",
         pady=(RELATED_CONTROL_GAP_PX, 0),
     )
 
-    ttk.Label(settings_frame, text="Initial dB").grid(row=0, column=2, sticky="w")
-    initial_gain_db_entry = ttk.Entry(
+    peak_headroom_db_entry = add_db_entry(
         settings_frame,
-        textvariable=initial_gain_db_var,
-        width=12,
-        justify="right",
+        "Headroom dB",
+        peak_headroom_db_var,
+        row=0,
+        column=2,
+        bottom_gap=RELATED_CONTROL_GAP_PX,
     )
-    initial_gain_db_entry.grid(row=1, column=2, sticky="w", pady=(CONTROL_TITLE_GAP_PX, 0))
-    initial_gain_db_entry.bind("<FocusOut>", lambda _event: format_decimal_var(initial_gain_db_var))
+    peak_headroom_db_entry.bind("<FocusOut>", lambda _event: on_peak_headroom_focus_out())
+
+    add_db_entry(
+        settings_frame,
+        "- (Raw + Head) dB",
+        initial_gain_db_var,
+        row=0,
+        column=3,
+        label_width=CALCULATED_GAIN_LABEL_WIDTH_CHARS,
+    )
     ttk.Button(
         settings_frame,
         text="Analyze peak",
         command=analyze_peak,
-    ).grid(row=3, column=2, sticky="w", pady=(CONTROL_TITLE_GAP_PX, 0))
-    ttk.Label(settings_frame, text="Peak gain").grid(
-        row=2,
-        column=3,
-        sticky="w",
-        pady=(COMPACT_SECTION_ROW_GAP_PX, 0),
-    )
-    ttk.Label(
-        settings_frame,
-        textvariable=peak_analysis_results_var,
-        style="Muted.TLabel",
-        width=12,
-        justify="left",
-    ).grid(row=3, column=3, rowspan=5, sticky="nw", pady=(CONTROL_TITLE_GAP_PX, 0))
-
-    ttk.Label(settings_frame, text="Headroom dB").grid(row=0, column=3, sticky="w")
-    peak_headroom_db_entry = ttk.Entry(
-        settings_frame,
-        textvariable=peak_headroom_db_var,
-        width=12,
-        justify="right",
-    )
-    peak_headroom_db_entry.grid(row=1, column=3, sticky="w", pady=(CONTROL_TITLE_GAP_PX, RELATED_CONTROL_GAP_PX))
-    peak_headroom_db_entry.bind("<FocusOut>", lambda _event: on_peak_headroom_focus_out())
+    ).grid(row=3, column=3, sticky="w", pady=(CONTROL_TITLE_GAP_PX, 0))
 
     min_db_var.trace_add("write", update_step_count)
-    db_interval_var.trace_add("write", update_step_count)
-    db_interval_var.trace_add("write", update_command_preview)
+    interval_db_var.trace_add("write", update_step_count)
+    interval_db_var.trace_add("write", update_command_preview)
     initial_gain_db_var.trace_add("write", update_command_preview)
     overwrite_var.trace_add("write", update_command_preview)
     encoder_mode_choice_var.trace_add("write", update_command_preview)
@@ -617,17 +662,17 @@ def main() -> None:
         textvariable=encoder_mode_choice_var,
         values=tuple(ENCODER_MODE_LABELS),
         state="readonly",
-        width=22,
+        width=ENCODER_MODE_WIDTH_CHARS,
     ).grid(row=1, column=0, sticky="nw", pady=(CONTROL_TITLE_GAP_PX, 0))
     quality_scale_frame = ttk.Frame(encoder_frame)
-    quality_scale_frame.grid(row=0, column=1, rowspan=2, sticky="ew", padx=(32, 0))
+    quality_scale_frame.grid(row=0, column=1, rowspan=2, sticky="ew", padx=(ENCODER_SCALE_PAD_X_PX, 0))
     ttk.Label(
         quality_scale_frame,
         text="q\nkbps",
         style="Muted.TLabel",
         anchor="center",
         justify="center",
-    ).grid(row=0, column=0, sticky="ew", padx=(0, 6))
+    ).grid(row=0, column=0, sticky="ew", padx=(0, COMPACT_SECTION_ROW_GAP_PX))
     for column, quality in enumerate(VORBIS_QUALITY_VALUES, start=1):
         quality_scale_frame.columnconfigure(column, weight=1, uniform="vorbis_quality")
         quality_label = ttk.Label(
@@ -647,7 +692,7 @@ def main() -> None:
         orient="horizontal",
         resolution=0.5,
         showvalue=False,
-        length=330,
+        length=VORBIS_SCALE_LENGTH_PX,
         highlightthickness=0,
     ).grid(row=1, column=1, columnspan=len(VORBIS_QUALITY_VALUES), sticky="ew")
     update_vorbis_quality_markers()
@@ -678,7 +723,7 @@ def main() -> None:
         output_frame,
         textvariable=output_folder_var,
         justify="left",
-    ).grid(row=0, column=1, sticky="ew", padx=(8, 8))
+    ).grid(row=0, column=1, sticky="ew", padx=(FIELD_PAD_X_PX, FIELD_PAD_X_PX))
     ttk.Button(
         output_frame,
         text="Browse...",
@@ -693,12 +738,12 @@ def main() -> None:
         action_frame,
         text="Overwrite existing files",
         variable=overwrite_var,
-    ).grid(row=0, column=1, sticky="e", padx=(8, 0))
+    ).grid(row=0, column=1, sticky="e", padx=(BUTTON_PAD_X_PX, 0))
     ttk.Button(action_frame, text="Run conversion", command=run_conversion).grid(
         row=0,
         column=2,
         sticky="e",
-        padx=(8, 0),
+        padx=(BUTTON_PAD_X_PX, 0),
     )
     open_output_button = ttk.Button(
         action_frame,
@@ -709,7 +754,7 @@ def main() -> None:
         row=0,
         column=3,
         sticky="e",
-        padx=(8, 0),
+        padx=(BUTTON_PAD_X_PX, 0),
     )
     open_output_button.state(["disabled"])
 

@@ -12,13 +12,13 @@ class OutputPlanItem:
     output_path: Path
 
 
-def calculate_step_count(min_db: float, db_interval: float) -> int:
+def calculate_step_count(min_db: float, interval_db: float) -> int:
     if min_db >= 0:
         raise ValueError("min_db must be less than 0")
-    if db_interval <= 0:
-        raise ValueError("db_interval must be greater than 0")
+    if interval_db <= 0:
+        raise ValueError("interval_db must be greater than 0")
 
-    return math.floor(abs(min_db) / db_interval) + 1
+    return math.floor(abs(min_db) / interval_db) + 1
 
 
 def build_output_plan(
@@ -26,7 +26,7 @@ def build_output_plan(
     output_dir: Path,
     db_offset: float,
     step_count: int,
-    db_interval: float,
+    interval_db: float,
     output_extension: str = DEFAULT_OUTPUT_EXTENSION,
 ) -> list[OutputPlanItem]:
     if step_count < 1:
@@ -38,7 +38,7 @@ def build_output_plan(
     return [
         OutputPlanItem(
             index=index,
-            gain_db=db_offset + (index * db_interval),
+            gain_db=db_offset + (index * interval_db),
             output_path=output_dir / f"{stem}_{index}{extension}",
         )
         for index in range(step_count)

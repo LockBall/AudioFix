@@ -28,14 +28,14 @@ from audiofix.core.ffmpeg import (
 
 class BuildOutputPlanTests(unittest.TestCase):
     def test_calculates_step_count_from_min_db_and_interval(self) -> None:
-        self.assertEqual(calculate_step_count(min_db=-60.0, db_interval=3.0), 21)
-        self.assertEqual(calculate_step_count(min_db=-60.0, db_interval=1.5), 41)
+        self.assertEqual(calculate_step_count(min_db=-60.0, interval_db=3.0), 21)
+        self.assertEqual(calculate_step_count(min_db=-60.0, interval_db=1.5), 41)
 
     def test_rejects_invalid_step_count_inputs(self) -> None:
         with self.assertRaises(ValueError):
-            calculate_step_count(min_db=0.0, db_interval=3.0)
+            calculate_step_count(min_db=0.0, interval_db=3.0)
         with self.assertRaises(ValueError):
-            calculate_step_count(min_db=-60.0, db_interval=0.0)
+            calculate_step_count(min_db=-60.0, interval_db=0.0)
 
     def test_builds_numbered_outputs_with_db_steps(self) -> None:
         plan = build_output_plan(
@@ -43,7 +43,7 @@ class BuildOutputPlanTests(unittest.TestCase):
             output_dir=Path("out"),
             db_offset=-3.0,
             step_count=3,
-            db_interval=-3.0,
+            interval_db=-3.0,
         )
 
         self.assertEqual([item.index for item in plan], [0, 1, 2])
@@ -64,7 +64,7 @@ class BuildOutputPlanTests(unittest.TestCase):
                 output_dir=Path("out"),
                 db_offset=0.0,
                 step_count=0,
-                db_interval=-3.0,
+                interval_db=-3.0,
             )
 
 
@@ -98,7 +98,7 @@ class FfmpegCommandTests(unittest.TestCase):
             output_dir=Path("out"),
             db_offset=-12.39,
             step_count=1,
-            db_interval=-3.0,
+            interval_db=-3.0,
         )
 
         audio_filter = build_audio_filter(plan[0], FfmpegOptions())
@@ -141,7 +141,7 @@ class FfmpegCommandTests(unittest.TestCase):
             output_dir=Path("out"),
             db_offset=-12.39,
             step_count=1,
-            db_interval=-3.0,
+            interval_db=-3.0,
         )
 
         command = build_ffmpeg_command(
@@ -183,7 +183,7 @@ class FfmpegCommandTests(unittest.TestCase):
             output_dir=Path("out"),
             db_offset=-12.39,
             step_count=1,
-            db_interval=-3.0,
+            interval_db=-3.0,
         )
 
         command = build_ffmpeg_command(
@@ -201,7 +201,7 @@ class FfmpegCommandTests(unittest.TestCase):
             output_dir=Path("out"),
             db_offset=-12.39,
             step_count=1,
-            db_interval=-3.0,
+            interval_db=-3.0,
         )
 
         command = build_ffmpeg_command(
@@ -226,7 +226,7 @@ class FfmpegCommandTests(unittest.TestCase):
             output_dir=Path("out"),
             db_offset=-12.39,
             step_count=1,
-            db_interval=-3.0,
+            interval_db=-3.0,
         )
 
         with mock.patch("audiofix.core.ffmpeg.run_ffmpeg_command") as run_command:

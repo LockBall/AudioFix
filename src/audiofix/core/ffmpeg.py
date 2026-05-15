@@ -8,6 +8,10 @@ import subprocess
 from audiofix.core.config import ENCODER_MODE_BITRATE, get_runtime_paths
 from audiofix.core.planning import OutputPlanItem
 
+ASTATS_OVERALL_RE = re.compile(r"\bOverall\b")
+ASTATS_CHANNEL_RE = re.compile(r"\bChannel:\s*\d+")
+ASTATS_PEAK_RE = re.compile(r"Peak level dB:\s*(-?\d+(?:\.\d+)?)")
+
 
 @dataclass(frozen=True)
 class FfmpegOptions:
@@ -209,14 +213,14 @@ def measure_max_volume_db(ffmpeg_path: Path, source_path: Path) -> float:
 def _parse_overall_peak_level_db(output: str) -> float | None:
     in_overall_section = False
     for line in output.splitlines():
-        if re.search(r"\bOverall\b", line):
+        if ASTATS_OVERALL_RE.search(line):
             in_overall_section = True
             continue
-        if in_overall_section and re.search(r"\bChannel:\s*\d+", line):
+        if in_overall_section and ASTATS_CHANNEL_RE.search(line):
             in_overall_section = False
 
         if in_overall_section:
-            match = re.search(r"Peak level dB:\s*(-?\d+(?:\.\d+)?)", line)
+            match = ASTATS_PEAK_RE.search(line)
             if match:
                 return float(match.group(1))
 
