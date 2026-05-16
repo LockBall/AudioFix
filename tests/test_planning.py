@@ -78,6 +78,35 @@ class BuildOutputPlanTests(unittest.TestCase):
             ],
         )
 
+    def test_builds_numbered_outputs_with_custom_stem(self) -> None:
+        plan = build_output_plan(
+            source_path=Path("levelup2.ogg"),
+            output_dir=Path("out"),
+            db_offset=-3.0,
+            step_count=2,
+            interval_db=-3.0,
+            output_stem="readycheck",
+        )
+
+        self.assertEqual(
+            [item.output_path for item in plan],
+            [
+                Path("out/readycheck_0.ogg"),
+                Path("out/readycheck_1.ogg"),
+            ],
+        )
+
+    def test_rejects_empty_custom_stem(self) -> None:
+        with self.assertRaises(ValueError):
+            build_output_plan(
+                source_path=Path("source.ogg"),
+                output_dir=Path("out"),
+                db_offset=0.0,
+                step_count=1,
+                interval_db=-3.0,
+                output_stem=" ",
+            )
+
     def test_rejects_zero_steps(self) -> None:
         with self.assertRaises(ValueError):
             build_output_plan(
@@ -281,6 +310,7 @@ class ConversionLogTests(unittest.TestCase):
         settings = ConversionLogSettings(
             source_path=Path("source.ogg"),
             output_dir=Path("out"),
+            source_channels=2,
             min_db=-60.0,
             interval_db=3.0,
             raw_peak_db=1.0,
@@ -306,6 +336,7 @@ class ConversionLogTests(unittest.TestCase):
 
         log_text = "\n".join(lines)
         self.assertIn("Status: failed", log_text)
+        self.assertIn("Source channels: stereo", log_text)
         self.assertIn("source_0.ogg: ffmpeg failed", log_text)
         self.assertIn("index\toutput_file\tgain_db\tstatus\tmessage", log_text)
         self.assertIn("0\tsource_0.ogg\t-1.500\tfailed\tffmpeg failed", log_text)
@@ -358,6 +389,7 @@ class ConversionServiceTests(unittest.TestCase):
             settings = ConversionLogSettings(
                 source_path=Path("source.ogg"),
                 output_dir=output_dir,
+                source_channels=1,
                 min_db=-60.0,
                 interval_db=3.0,
                 raw_peak_db=1.0,

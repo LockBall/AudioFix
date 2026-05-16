@@ -16,7 +16,8 @@ mute the sound.
 ## Current Behavior
 
 - Input: one audio file.
-- Output: numbered Ogg Vorbis files named `source_0.ogg`, `source_1.ogg`, etc.
+- Output: numbered Ogg Vorbis files named from the editable output path, such
+  as `readycheck_0.ogg`, `readycheck_1.ogg`, etc.
 - File `_0` is the loudest generated file.
 - Later files are quieter by a regular dB interval.
 - Peak analysis uses FFmpeg `astats` overall `Peak level dB`.
@@ -30,6 +31,25 @@ calculated gain dB = -overall peak dB - abs(headroom dB)
 - Conversion uses FFmpeg's `volume=...dB` filter.
 - Successful runs write `conversion_log.txt`.
 - Failed runs write `conversion_failed_log.txt`.
+
+## Output Path
+
+The output path field controls both the destination folder and the generated
+file stem. AudioFix appends the numbered suffix and `.ogg` extension.
+
+For example, this output path:
+
+```text
+F:\sounds\readycheck_out\readycheck
+```
+
+generates:
+
+```text
+F:\sounds\readycheck_out\readycheck_0.ogg
+F:\sounds\readycheck_out\readycheck_1.ogg
+F:\sounds\readycheck_out\readycheck_2.ogg
+```
 
 ## Level Controls
 

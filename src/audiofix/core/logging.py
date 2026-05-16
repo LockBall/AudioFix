@@ -11,6 +11,7 @@ from audiofix.core.planning import OutputPlanItem
 class ConversionLogSettings:
     source_path: Path
     output_dir: Path
+    source_channels: int | None
     min_db: float
     interval_db: float
     raw_peak_db: float | None
@@ -64,6 +65,7 @@ def build_conversion_log_lines(
         "",
         "Settings:",
         f"Source: {settings.source_path}",
+        f"Source channels: {_format_channels(settings.source_channels)}",
         f"Output folder: {settings.output_dir}",
         f"Minimum dB: {settings.min_db:.3f}",
         f"Interval dB: {settings.interval_db:.3f}",
@@ -109,6 +111,16 @@ def _format_optional_number(value: float | None) -> str:
     if value is None:
         return "n/a"
     return f"{value:g}"
+
+
+def _format_channels(channels: int | None) -> str:
+    if channels == 1:
+        return "mono"
+    if channels == 2:
+        return "stereo"
+    if channels is None:
+        return "unknown"
+    return f"{channels} channels"
 
 
 def _format_output_path(output_path: Path, output_dir: Path) -> str:

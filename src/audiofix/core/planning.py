@@ -38,13 +38,16 @@ def build_output_plan(
     db_offset: float,
     step_count: int,
     interval_db: float,
+    output_stem: str | None = None,
     output_extension: str = DEFAULT_OUTPUT_EXTENSION,
 ) -> list[OutputPlanItem]:
     if step_count < 1:
         raise ValueError("step_count must be at least 1")
 
     extension = output_extension if output_extension.startswith(".") else f".{output_extension}"
-    stem = source_path.stem
+    stem = (output_stem or source_path.stem).strip()
+    if not stem:
+        raise ValueError("output filename must not be empty")
 
     return [
         OutputPlanItem(

@@ -159,7 +159,7 @@ def main() -> None:
     level_input_mode_var = tk.StringVar(value=LEVEL_INPUT_FILE_COUNT)
     peak_headroom_db_var = tk.StringVar(value="")
     step_count_var = tk.StringVar(value="")
-    output_folder_var = tk.StringVar(value="")
+    output_path_var = tk.StringVar(value="")
     audio_info_var = tk.StringVar(value="Audio info: select an input file.")
     raw_peak_var = tk.StringVar(value="Raw peak: --")
     overwrite_var = tk.BooleanVar(value=False)
@@ -210,6 +210,17 @@ def main() -> None:
         sample_rate = f"{info.sample_rate} Hz" if info.sample_rate else "unknown sample rate"
         channels = f"{info.channels} ch" if info.channels else "unknown channels"
         return f"Audio info: {info.codec_name}, {bit_rate}, {sample_rate}, {channels}"
+
+    def parse_output_target() -> tuple[Path, str]:
+        output_text = output_path_var.get().strip()
+        if not output_text:
+            raise ValueError("enter an output path")
+
+        output_target = Path(output_text)
+        output_stem = output_target.stem if output_target.suffix else output_target.name
+        if not output_stem:
+            raise ValueError("output filename must not be empty")
+        return output_target.parent, output_stem
 
     def get_audio_info(source_path: Path, tool_status: ToolStatus | None = None) -> AudioInfo | None:
         tool_status = tool_status or update_tool_status()
@@ -324,8 +335,7 @@ def main() -> None:
 
     def update_command_preview(*_: object) -> None:
         source_text = file_path_var.get().strip()
-        output_text = output_folder_var.get().strip()
-        if not source_text or not output_text:
+        if not source_text or not output_path_var.get().strip():
             command_preview_var.set("ffmpeg command preview unavailable.")
             return
 
@@ -346,14 +356,20 @@ def main() -> None:
             command_preview_var.set("ffmpeg command preview unavailable: enter valid level settings.")
             return
 
+        try:
+            output_dir, output_stem = parse_output_target()
+        except ValueError:
+            command_preview_var.set("ffmpeg command preview unavailable: enter valid output path.")
+            return
+
         source_path = Path(source_text)
-        output_dir = Path(output_text)
         plan = build_output_plan(
             source_path=source_path,
             output_dir=output_dir,
             db_offset=calculated_gain_db,
             step_count=1,
             interval_db=-abs(interval_db),
+            output_stem=output_stem,
         )
         command = build_ffmpeg_command(
             ffmpeg_path=tool_status.ffmpeg.path,
@@ -441,7 +457,7 @@ def main() -> None:
         analyze_peak_button.state(state)
         encoder_mode_combobox.state(["readonly"] if enabled else ["disabled"])
         quality_scale.configure(state="normal" if enabled else "disabled")
-        output_folder_entry.state(state)
+        output_path_entry.state(state)
         output_browse_button.state(state)
         overwrite_checkbutton.state(state)
         run_conversion_button.state(state)
@@ -464,7 +480,7 @@ def main() -> None:
         if path:
             input_path = Path(path)
             file_path_var.set(str(input_path))
-            output_folder_var.set(str(input_path.with_name(f"{input_path.stem}_out")))
+            output_path_var.set(str(input_path.with_name(f"{input_path.stem}_out") / input_path.stem))
             last_audio_info[0] = None
             raw_peak_var.set("Raw peak: --")
             clear_generated_output_state()
@@ -476,7 +492,12 @@ def main() -> None:
             initialdir=str(media_dir),
         )
         if path:
-            output_folder_var.set(str(Path(path)))
+            try:
+                _output_dir, output_stem = parse_output_target()
+            except ValueError:
+                source_text = file_path_var.get().strip()
+                output_stem = Path(source_text).stem if source_text else "output"
+            output_path_var.set(str(Path(path) / output_stem))
             clear_generated_output_state()
             update_command_preview()
 
@@ -568,7 +589,7 @@ def main() -> None:
 
         try:
             source_text = file_path_var.get().strip()
-            output_text = output_folder_var.get().strip()
+            output_dir, output_stem = parse_output_target()
             min_db, interval_db, step_count = calculate_level_settings()
             update_level_fields()
             headroom_db = float(peak_headroom_db_var.get())
@@ -585,12 +606,8 @@ def main() -> None:
         if not source_text:
             status_var.set("Select an input file.")
             return
-        if not output_text:
-            status_var.set("Select an output folder.")
-            return
 
         source_path = Path(source_text)
-        output_dir = Path(output_text)
         if not source_path.is_file():
             status_var.set("Select a valid input file.")
             return
@@ -621,6 +638,7 @@ def main() -> None:
             db_offset=calculated_gain_db,
             step_count=step_count,
             interval_db=-abs(interval_db),
+            output_stem=output_stem,
         )
         existing_outputs = [item.output_path for item in plan if item.output_path.exists()]
         if existing_outputs and not overwrite_var.get():
@@ -632,6 +650,7 @@ def main() -> None:
         settings = ConversionLogSettings(
             source_path=source_path,
             output_dir=output_dir,
+            source_channels=audio_info.channels,
             min_db=min_db,
             interval_db=interval_db,
             raw_peak_db=parse_raw_peak_display(),
@@ -715,7 +734,7 @@ def main() -> None:
 
     ttk.Label(
         frame,
-        text="Select input, adjust settings, then choose an output folder.",
+        text="Select input, adjust settings, then choose an output path.",
         style="Muted.TLabel",
     ).grid(row=0, column=0, sticky="w")
 
@@ -951,16 +970,18 @@ def main() -> None:
     output_frame.grid(row=6, column=0, sticky="ew", pady=(APP_ROW_GAP_PX, 0))
     output_frame.columnconfigure(1, weight=1)
 
-    ttk.Label(output_frame, text="Output folder").grid(row=0, column=0, sticky="w")
-    output_folder_entry = ttk.Entry(
+    ttk.Label(output_frame, text="Output path").grid(row=0, column=0, sticky="w")
+    output_path_entry = ttk.Entry(
         output_frame,
-        textvariable=output_folder_var,
+        textvariable=output_path_var,
         justify="left",
     )
-    output_folder_entry.grid(row=0, column=1, sticky="ew", padx=(FIELD_PAD_X_PX, FIELD_PAD_X_PX))
+    output_path_entry.grid(row=0, column=1, sticky="ew", padx=(FIELD_PAD_X_PX, FIELD_PAD_X_PX))
+    output_path_var.trace_add("write", update_command_preview)
+
     output_browse_button = ttk.Button(
         output_frame,
-        text="Browse...",
+        text="Browse folder...",
         command=browse_output_folder,
     )
     output_browse_button.grid(row=0, column=2, sticky="e")
