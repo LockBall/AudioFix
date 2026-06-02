@@ -242,22 +242,33 @@ e.g. achievmentsound1, FishingBobber_ver2
 1. open the De-Clip tool
 
 
-##### boost a quiet file using Auto Gain
-- Target Volume (dB)  : maintain this level ~ this
-  - effectively sets headroom
-- Update Interval (s) : e.g. 0.5, check loudness twice / sec, adjust if needed
-  - longer is smoother
-- attack / relase (s) : if max then overall amplitude increase is decreased
+#### Boost quiet file with GoldWave Auto Gain
+settings explanation in software help
+
+- Target Volume (dB): `-0.5` 
+  - maintain level at ~ this, effectively sets headroom
+
+- Update Interval (s): `0.5`
+  - Time between volume adjustments
+  - if too low then target volume gets ignored and clipping is generated
+
+- attack / release (s): `0.100` if max then overall amplitude increase is decreased
   - Attack = how fast it boosts when audio gets quiet
   - Release = how fast it reduces gain when audio gets loud
   - 0.100s : React quickly but not instantly — avoid pumping
+
 - maximum gain (dB)   : eponymous, if 0 then no change
-- Silence Level (dB)  : if max then no change
-  - Any audio below this threshold is treated as silence and ignored by the gain algorithm
-  - At ‑26 dB, anything quieter won’t trigger gain boosts
+  - `use this to make the different files`
+  - 3.522  150 %
+
+- Silence Level (dB): `-60.0`
   - Prevents Auto Gain from cranking up background noise or tails
   - keeps gain behavior stable and prevents noise pumping
- 
+  - if max then no change
+  - if min then ignore
+  - audio quieter than this is treated as silence / ignored / not boosted
+  - suspect w have effectively 0 noise so set to min 
+
 
  ## Acronyms
 
